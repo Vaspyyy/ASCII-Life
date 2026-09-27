@@ -238,3 +238,26 @@ The fixed-step tour advances movement and visual time once per successful presen
 - Inspected native readbacks include the default shoreline, night lighting, an elevated lake vista, and third-person upward framing. Reproduce the elevated view with `--hide-hud --view 60,-600,0,-0.12,120 --capture artifacts/vista.ppm`. Images/logs remain local ignored artifacts, not shipped content.
 
 This remains a landscape prototype. Water reflection approximates sky color and sunlight; it does not reflect nearby geometry. Trees and the explorer use generated projected silhouettes. There is no physical tree collision, swimming, animation rig or life simulation. Third-person terrain clearance can force close framing in extreme clefts. The finite heightfield clamps at its boundary; planetary geography, hydrology and streaming are later work. Visual quality beyond the inspected views and other GPUs/compositors is not claimed validated.
+
+
+## 1440p completion baseline — 2026-09-27
+
+From this point, completion metrics use **2560 × 1440** output by default. Remeasured the unchanged M1 executable from commit `8e4fb8f6bee1204f7a21477b9ae90021801b1568` on the same RTX 3070 / KDE Wayland host, ReleaseSmall, seed `0xa11fe`. Native window inspection confirmed 2560 × 1440. Each run presented 600 frames, with 599 GPU timestamp samples, without validation layers. The current logical grid remains **240 × 135 (32,400 cells)**.
+
+| Metric | Stationary (`--static`) | Moving (`--tour`) |
+| --- | ---: | ---: |
+| Terrain generation | 61.667 ms | 57.778 ms |
+| Main entry to first successful present | 221.966 ms | 206.353 ms |
+| CPU per frame/draw attempt | 3.7112 ms | 3.7044 ms |
+| GPU command interval | 0.1059 ms | 0.1047 ms |
+| Uncapped CPU-equivalent FPS (`1000 / CPU ms`) | 269.45 | 269.95 |
+| Steady RSS | 84,864–84,928 KiB | 84,912–84,972 KiB |
+| NVIDIA process graphics memory | 55 MiB | 55 MiB |
+
+CPU-equivalent FPS is an arithmetic estimate of main-thread capacity, not measured uncapped presentation throughput. The application retains its 60 Hz work cap and FIFO presentation. Startup measures main entry to the successful present call, not physical display scanout. RSS includes native libraries and driver/context allocations; driver-reported process graphics memory is the available VRAM measurement.
+
+Reverified packaging sizes: **120,840 bytes** stripped dynamic ELF; **59,388 bytes** `xz -9` ELF; **1,258,436 bytes** runtime `.tar.xz` (3,613,085-byte unpacked payload). The bundle's ELF checksum still matches the measured game. Resolution does not alter those files; no runtime/source changes were needed for this measurement.
+
+The finite region is **8,192 × 8,192 m (67.108864 km²)**. A full scan of its 1,050,625 cached height samples found peak world Y **1,040.75 m**, or **960.75 m above the water/sea datum at Y=80 m**, for seed `0xa11fe`. Bilinear interpolation cannot exceed the maximum cached corner height. This is the complete region maximum, not a sampled visible ridge or the generator's theoretical height limit.
+
+Raw run logs are `artifacts/m1-1440-static.log` and `artifacts/m1-1440-tour.log`. Historical 1080p measurements above remain unchanged.

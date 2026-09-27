@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 root = pathlib.Path(__file__).resolve().parent.parent
 subprocess.run(["zig", "build", "-Doptimize=ReleaseSmall"], cwd=root, check=True)
 binary = root / "zig-out/bin/ascii-life"
-process = subprocess.Popen([str(binary), *sys.argv[1:], "--metrics", "--frames", "600"], cwd=root,
+process = subprocess.Popen([str(binary), "--size", "2560x1440", *sys.argv[1:], "--metrics", "--frames", "600"], cwd=root,
                            stderr=subprocess.PIPE)
 os.set_blocking(process.stderr.fileno(), False)
 log_parts = []

@@ -21,7 +21,7 @@ zig build run -Doptimize=ReleaseSmall   # explore the optimized build
 zig build -Doptimize=ReleaseSmall       # stripped release
 ./zig-out/bin/ascii-life --metrics
 ./scripts/size.sh                       # rebuild + exact size/library report
-./scripts/measure.py                    # bounded release timing/RSS/VRAM probe
+./scripts/measure.py                    # 1440p release timing/RSS/VRAM probe
 ./scripts/bundle.py                     # measured same-host runtime bundle
 ```
 
@@ -81,3 +81,5 @@ mkdir -p artifacts
 ./zig-out/bin/ascii-life --hide-hud --view 60,-600,0,-0.12,120 --capture artifacts/vista.ppm
 ./zig-out/bin/ascii-life --metrics --tour
 ```
+
+Completion reports use 2560 × 1440 measurements; `scripts/measure.py` sets that window size by default. This changes output resolution, not the current 240 × 135 logical glyph field. The full required reporting checklist is in `AGENTS.md`.

@@ -277,3 +277,22 @@ A giant simulation that needs huge content packs is not enough.
 ASCII-Life succeeds when all three reinforce one another:
 
 **beauty + life + tiny representation.**
+
+
+## Completion metrics
+
+After coding work, report measurements at **2560 × 1440** by default. Include:
+
+- stripped dynamic ELF bytes
+- xz-compressed ELF bytes
+- runtime bundle `.tar.xz` bytes
+- terrain generation time
+- startup to first presented frame
+- CPU and GPU time per frame
+- uncapped CPU-equivalent FPS, calculated as `1000 / CPU milliseconds` and explicitly distinguished from measured presentation FPS
+- steady-state RAM/RSS and process VRAM
+- logical render grid
+- generated world-region dimensions
+- peak elevation for the reported seed, stating the elevation datum
+
+Use the release build, identify the seed and benchmark scenario, and report unavailable measurements honestly. Keep historical measurements at their original resolution; do not relabel older results as 1440p. `scripts/measure.py` defaults to 1440p. Report stationary and moving-camera costs when relevant.
