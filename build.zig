@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     const run = b.addRunArtifact(exe);
     if (b.args) |args| run.addArgs(args);
-    b.step("run", "Run the native glyph foundation").dependOn(&run.step);
-    const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/scene.zig"), .target = target, .optimize = optimize }) });
-    b.step("test", "Check deterministic cells and glyph representation").dependOn(&b.addRunArtifact(tests).step);
+    b.step("run", "Explore the native glyph landscape").dependOn(&run.step);
+    const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests.zig"), .target = target, .optimize = optimize }) });
+    b.step("test", "Check deterministic terrain, camera and glyph rendering").dependOn(&b.addRunArtifact(tests).step);
 }

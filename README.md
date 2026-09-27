@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 0 now provides the native glyph-rendering foundation. The life simulation and explorable landscape are later milestones.
+Milestone 1 builds on the native glyph foundation with an explorable seeded landscape. The life simulation is a later milestone.
 
 See:
 
@@ -209,11 +209,11 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 0 foundation.**
+**Pre-alpha / Milestone 1 landscape.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
 
-Milestone 0 renders a deterministic colored-glyph study, handles native input and resizing, and records executable size and runtime costs.
+Explore a seeded regional heightfield with mountains, forests, water, atmosphere, and first/third-person cameras. The landscape is generated at runtime; no external visual assets are shipped.
 
-The next milestone is an explorable procedural fantasy landscape. World simulation and RPG systems have not been implemented.
+World simulation and RPG systems have not been implemented. Milestone 2 will develop the terrain into coherent geography.

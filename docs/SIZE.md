@@ -195,3 +195,46 @@ The first complete capture-capable release used `std.debug.print` and the defaul
 - A real Vulkan image readback was inspected at 1280 × 720. Glyphs, foreground/background colors, orientation, labels, and scene composition render correctly. KDE desktop screenshot capture was unavailable through the automation backend; the capture is a framebuffer readback, not a compositor screenshot.
 - Zero extent and xdg suspended state are handled in code; manual compositor minimization was not exercised. Other GPUs, mixed-DPI outputs, and compositor families remain untested.
 - Visual captures and raw logs are local outputs under ignored `artifacts/`; regenerate them with the documented commands rather than shipping them as game assets.
+
+## Milestone 1 landscape — 2026-09-27
+
+Measured on the M1 working tree based on `51c94143c32f771380b382f615770a485e1b19c2`, using the same Zig 0.16.0 / KDE Wayland / RTX 3070 host as M0. Build/source/shader digest, using the M0 procedure: `8f963f841f0588a771f97c7513cbd8bc7816164345ab68282a046d84a54f7859`. ELF SHA-256: `01b3f6285c36e9088c892f13596428500538dd66a9e0e3872ee63f46500e11cc`.
+
+| Record | Exact bytes | Change from M0 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 120,840 | +59,664 |
+| Single ELF compressed with `xz -9` | 59,388 | +36,152 |
+| Local runtime bundle payload | 3,613,085 | +59,664 |
+| Local runtime bundle `.tar.xz` | 1,258,436 | +35,940 |
+| Transient height cache | 2,101,250 | New; generated at startup, not shipped |
+| Logical cell payload | 518,400 | +288,000 |
+| Per-cell terrain depth plane | 129,600 | New CPU working memory |
+| Embedded glyph bitsets | 1,024 | Unchanged |
+
+No dependencies or external assets were added. The practical bundle retains the M0 host boundary: it includes the locally resolved library closure, but requires the kernel, Wayland compositor and GPU driver/ICD infrastructure. It is not a fully static executable or a cross-distribution compatibility claim. The new bundle completed a 120-frame native run from `/tmp`.
+
+### Runtime measurements
+
+Both commands presented 600 frames at **1920 × 1080**, with a **240 × 135** logical field, default seed `0xa11fe`, and no validation layer. These are larger pixel and cell counts than the M0 baseline, so this is a milestone cost record rather than a controlled renderer speed comparison. Measurement definitions and host-noise limitations remain as described under M0.
+
+| Measurement | `scripts/measure.py --static` | `scripts/measure.py --tour` |
+| --- | ---: | ---: |
+| Heightfield generation | 58.357 ms | 58.978 ms |
+| Main entry to first successful present | 199.807 ms | 202.695 ms |
+| Main-thread CPU per draw attempt | 3.7630 ms | 3.7583 ms |
+| Frame work wall time | 3.8340 ms | 3.8060 ms |
+| GPU command interval, 599 samples | 0.0781 ms | 0.0756 ms |
+| 600-frame elapsed time including startup | 10,217.38 ms | 10,220.34 ms |
+| Steady RSS | 84,868–84,928 KiB | 84,908–84,968 KiB |
+| NVIDIA per-process graphics memory | 37 MiB | 37 MiB |
+
+The fixed-step tour advances movement and visual time once per successful presentation and switches to third person at its midpoint. Its final reported pose was `216.85,-87.24,0.900,0.100,0.00`, third person, day fraction `0.4017`. The CPU cost includes procedural glyph selection and tree projection; the GPU rasterizes the resulting cells. Both runs used the existing 60 Hz work cap.
+
+### Validation and visual evidence
+
+- Debug and ReleaseSmall tests pass for the complete terrain fingerprint, seed distinction, bounds/normals, stable tree identities, camera motion, third-person framing, glyph layout, sun direction under camera yaw, and repeated landscape output.
+- `scripts/verify_m1.py` passes: identical inputs produce byte-identical native GPU captures; alternate seeds, day/night and camera views differ; two fixed-step tours end in the same state; invalid arguments are rejected. Captures run from `/tmp` under `VK_LAYER_KHRONOS_validation`, with no Vulkan validation errors.
+- Native key input verified movement, turning, camera switching and stepping time. F11 resized 1920 × 1080 → 2560 × 1440 → 1920 × 1080, and Escape exited cleanly. These input/resize checks were performed before the final shading and camera-framing adjustments; those adjustments were subsequently covered by unit tests, native tours and captures.
+- Inspected native readbacks include the default shoreline, night lighting, an elevated lake vista, and third-person upward framing. Reproduce the elevated view with `--hide-hud --view 60,-600,0,-0.12,120 --capture artifacts/vista.ppm`. Images/logs remain local ignored artifacts, not shipped content.
+
+This remains a landscape prototype. Water reflection approximates sky color and sunlight; it does not reflect nearby geometry. Trees and the explorer use generated projected silhouettes. There is no physical tree collision, swimming, animation rig or life simulation. Third-person terrain clearance can force close framing in extreme clefts. The finite heightfield clamps at its boundary; planetary geography, hydrology and streaming are later work. Visual quality beyond the inspected views and other GPUs/compositors is not claimed validated.

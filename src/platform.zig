@@ -9,8 +9,8 @@ pub const c = @cImport({
 pub const Platform = struct {
     display: ?*c.wl_display = null,
     surface: ?*c.wl_surface = null,
-    width: u32 = 1280,
-    height: u32 = 720,
+    width: u32 = 1920,
+    height: u32 = 1080,
     configured: bool = false,
     running: bool = true,
     resized: bool = false,
@@ -21,6 +21,10 @@ pub const Platform = struct {
     /// Linux evdev key state, indexed by key code. Entries are updated on
     /// both press and release, including the keys in keyboard-enter events.
     keys_down: [768]bool = [_]bool{false} ** 768,
+    keys_pressed: [768]bool = [_]bool{false} ** 768,
+    right_mouse: bool = false,
+    look_dx: f32 = 0,
+    look_dy: f32 = 0,
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
     suspended: bool = false,
@@ -35,13 +39,15 @@ pub const Platform = struct {
     pointer: ?*c.wl_pointer = null,
     user_paused: bool = false,
     fullscreen: bool = false,
-    pending_width: u32 = 1280,
-    pending_height: u32 = 720,
+    pending_width: u32 = 1920,
+    pending_height: u32 = 1080,
     pending_suspended: bool = false,
     registry_failed: bool = false,
 
     pub fn init(self: *Platform) !void {
-        self.* = .{};
+        const width = self.width;
+        const height = self.height;
+        self.* = .{ .width = width, .height = height, .pending_width = width, .pending_height = height };
 
         self.display = c.wl_display_connect(null) orelse return error.WaylandConnectFailed;
         errdefer self.deinit();
@@ -76,6 +82,20 @@ pub const Platform = struct {
         c.wl_surface_commit(surface);
         if (c.wl_display_roundtrip(display) < 0) return error.WaylandRoundtripFailed;
         if (c.wl_display_get_error(display) != 0) return error.WaylandConnectionFailed;
+    }
+
+    pub fn clearInput(self: *Platform) void {
+        self.keys_down = [_]bool{false} ** 768;
+        self.keys_pressed = [_]bool{false} ** 768;
+        self.look_dx = 0;
+        self.look_dy = 0;
+        self.right_mouse = false;
+    }
+
+    pub fn takePressed(self: *Platform, key: usize) bool {
+        const pressed = self.keys_pressed[key];
+        self.keys_pressed[key] = false;
+        return pressed;
     }
 
     pub fn deinit(self: *Platform) void {
@@ -294,7 +314,7 @@ fn onSeatCapabilities(data: ?*anyopaque, seat: ?*c.wl_seat, capabilities: u32) c
     } else if ((capabilities & c.WL_SEAT_CAPABILITY_KEYBOARD) == 0) {
         if (self.keyboard) |keyboard| c.wl_keyboard_destroy(keyboard);
         self.keyboard = null;
-        self.keys_down = [_]bool{false} ** 768;
+        self.clearInput();
     }
 
     if ((capabilities & c.WL_SEAT_CAPABILITY_POINTER) != 0 and self.pointer == null) {
@@ -306,6 +326,9 @@ fn onSeatCapabilities(data: ?*anyopaque, seat: ?*c.wl_seat, capabilities: u32) c
     } else if ((capabilities & c.WL_SEAT_CAPABILITY_POINTER) == 0) {
         if (self.pointer) |pointer| c.wl_pointer_destroy(pointer);
         self.pointer = null;
+        self.right_mouse = false;
+        self.look_dx = 0;
+        self.look_dy = 0;
     }
 }
 
@@ -317,7 +340,7 @@ fn onKeyboardKeymap(_: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, fd: i32, _: u32)
 
 fn onKeyboardEnter(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surface, keys: ?*c.wl_array) callconv(.c) void {
     const self = Platform.fromUserData(data);
-    self.keys_down = [_]bool{false} ** 768;
+    self.clearInput();
     if (keys) |key_array| {
         const size: usize = key_array.size;
         if (size >= @sizeOf(u32)) {
@@ -333,7 +356,7 @@ fn onKeyboardEnter(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surf
 }
 
 fn onKeyboardLeave(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surface) callconv(.c) void {
-    Platform.fromUserData(data).keys_down = [_]bool{false} ** 768;
+    Platform.fromUserData(data).clearInput();
 }
 
 fn onKeyboardKey(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, key: u32, state: u32) callconv(.c) void {
@@ -346,6 +369,7 @@ fn onKeyboardKey(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, key: u32
     // Linux evdev: Escape is 1, Space is 57, and F11 is 87. Ignore repeated presses for
     // the toggle while still counting every event and tracking key release.
     if (pressed and !was_down) {
+        if (key < self.keys_pressed.len) self.keys_pressed[key] = true;
         if (key == 1) self.running = false;
         if (key == 87) {
             self.fullscreen = !self.fullscreen;
@@ -371,18 +395,28 @@ fn onPointerEnter(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: ?*c.wl_surfac
 }
 
 fn onPointerLeave(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: ?*c.wl_surface) callconv(.c) void {
-    Platform.fromUserData(data).countPointerEvent();
+    const self = Platform.fromUserData(data);
+    self.right_mouse = false;
+    self.countPointerEvent();
 }
 
 fn onPointerMotion(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, x: c.wl_fixed_t, y: c.wl_fixed_t) callconv(.c) void {
     const self = Platform.fromUserData(data);
+    const px = c.wl_fixed_to_double(x);
+    const py = c.wl_fixed_to_double(y);
+    if (self.right_mouse) {
+        self.look_dx += @floatCast(px - self.pointer_x);
+        self.look_dy += @floatCast(py - self.pointer_y);
+    }
     self.countPointerEvent();
-    self.pointer_x = c.wl_fixed_to_double(x);
-    self.pointer_y = c.wl_fixed_to_double(y);
+    self.pointer_x = px;
+    self.pointer_y = py;
 }
 
-fn onPointerButton(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {
-    Platform.fromUserData(data).countPointerEvent();
+fn onPointerButton(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: u32, button: u32, state: u32) callconv(.c) void {
+    const self = Platform.fromUserData(data);
+    self.countPointerEvent();
+    if (button == 273) self.right_mouse = state == c.WL_POINTER_BUTTON_STATE_PRESSED;
 }
 
 fn onPointerAxis(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: u32, _: c.wl_fixed_t) callconv(.c) void {

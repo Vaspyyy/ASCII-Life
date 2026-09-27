@@ -2,6 +2,10 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const scene = @import("scene.zig");
+const terrain_mod = @import("terrain.zig");
+const Camera = @import("camera.zig").Camera;
+const CameraInput = @import("camera.zig").Input;
+const landscape = @import("landscape.zig");
 const clock = @cImport({
     @cInclude("time.h");
     @cInclude("stdio.h");
@@ -47,6 +51,14 @@ fn run(init: std.process.Init.Minimal) !void {
     var metrics = false;
     var frozen = false;
     var capture_path: ?[:0]const u8 = null;
+    var seed: u64 = terrain_mod.default_seed;
+    var time_of_day: f32 = 0.36;
+    var show_hud = true;
+    var third_person = false;
+    var tour = false;
+    var width: u32 = 1920;
+    var height: u32 = 1080;
+    var pose: ?[5]f32 = null;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--metrics")) metrics = true else if (std.mem.eql(u8, arg, "--static")) frozen = true else if (std.mem.eql(u8, arg, "--capture")) {
             capture_path = args.next() orelse return error.MissingCapturePath;
@@ -54,12 +66,44 @@ fn run(init: std.process.Init.Minimal) !void {
         } else if (std.mem.eql(u8, arg, "--frames")) {
             limit = try std.fmt.parseInt(u32, args.next() orelse return error.MissingFrameCount, 10);
             if (limit == 0) return error.InvalidFrameCount;
+        } else if (std.mem.eql(u8, arg, "--seed")) {
+            seed = try std.fmt.parseInt(u64, args.next() orelse return error.MissingSeed, 0);
+        } else if (std.mem.eql(u8, arg, "--time")) {
+            time_of_day = try finiteFloat(args.next() orelse return error.MissingTime);
+            if (time_of_day < 0 or time_of_day >= 1) return error.TimeOutsideDay;
+        } else if (std.mem.eql(u8, arg, "--third-person")) {
+            third_person = true;
+        } else if (std.mem.eql(u8, arg, "--hide-hud")) {
+            show_hud = false;
+        } else if (std.mem.eql(u8, arg, "--tour")) {
+            tour = true;
+        } else if (std.mem.eql(u8, arg, "--size")) {
+            var dims = std.mem.splitScalar(u8, args.next() orelse return error.MissingSize, 'x');
+            width = try std.fmt.parseInt(u32, dims.next() orelse return error.InvalidSize, 10);
+            height = try std.fmt.parseInt(u32, dims.next() orelse return error.InvalidSize, 10);
+            if (dims.next() != null or width < 320 or width > 3840 or height < 240 or height > 2160) return error.InvalidSize;
+        } else if (std.mem.eql(u8, arg, "--view")) {
+            var values = std.mem.splitScalar(u8, args.next() orelse return error.MissingView, ',');
+            var v: [5]f32 = undefined;
+            for (&v) |*value| value.* = try finiteFloat(values.next() orelse return error.InvalidView);
+            if (values.next() != null or @abs(v[0]) > 4096 or @abs(v[1]) > 4096 or @abs(v[2]) > 100 or @abs(v[3]) > 2 or v[4] < 0 or v[4] > 1500) return error.InvalidView;
+            pose = v;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            log("ASCII-Life / Milestone 0\n--metrics  Report startup and frame CPU cost\n--static   Freeze the deterministic scene at tick zero\n--frames N Exit cleanly after N frames\n--capture PATH Save the first rendered frame as PPM and exit\nSpace pauses animation; F11 toggles fullscreen; Escape closes.\n", .{});
+            log("ASCII-Life / Milestone 1\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze sun and water animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T advance daylight / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
             return;
         } else return error.UnknownArgument;
     }
-    var window: platform.Platform = .{};
+    if (tour and capture_path != null) return error.TourCaptureConflict;
+    if (tour and limit == 0) limit = 600;
+    const generation_start = now(clock.CLOCK_MONOTONIC);
+    var terrain = try terrain_mod.Terrain.init(std.heap.page_allocator, seed);
+    defer terrain.deinit();
+    var camera = Camera.init(&terrain);
+    camera.third_person = third_person;
+    if (pose) |v| camera.setPose(&terrain, v[0], v[1], v[2], v[3], v[4]);
+    const starting_camera = camera;
+    if (metrics) log("seed={d} terrain_generation_ms={d:.3}\n", .{ seed, @as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - generation_start)) / 1e6 });
+    var window: platform.Platform = .{ .width = width, .height = height };
     try window.init();
     defer window.deinit();
     while (!window.configured and window.running) try window.wait(100);
@@ -71,13 +115,16 @@ fn run(init: std.process.Init.Minimal) !void {
     window.resized = false; // init consumed the acknowledged initial dimensions.
     var cells: [scene.cols * scene.rows]scene.Cell = undefined;
     var frames: u32 = 0;
-    var tick: u32 = 0;
+    var animation_seconds: f32 = 0;
+    var previous_time = now(clock.CLOCK_MONOTONIC);
     var cpu_ns: u64 = 0;
     var wall_ns: u64 = 0;
     var resize_count: u32 = 0;
     var gpu_ns: u64 = 0;
     var gpu_samples: u64 = 0;
     var attempts: u64 = 0;
+    var tour_changed_view = false;
+    var tour_step_pending = false;
     while (window.running) {
         const frame_start = now(clock.CLOCK_MONOTONIC);
         const cpu_start = now(clock.CLOCK_THREAD_CPUTIME_ID);
@@ -90,10 +137,43 @@ fn run(init: std.process.Init.Minimal) !void {
             window.resized = false;
         }
         if (window.suspended) {
+            window.clearInput();
             try window.wait(100);
+            previous_time = now(clock.CLOCK_MONOTONIC);
             continue;
         }
-        scene.fill(&cells, tick, window.paused);
+        const dt: f32 = if (tour) 1.0 / 60.0 else @min(0.1, @as(f32, @floatFromInt(frame_start - previous_time)) / 1e9);
+        previous_time = frame_start;
+        var input: CameraInput = .{};
+        if (capture_path == null and !tour) {
+            input = .{
+                .forward = axis(&window, 17, 31),
+                .strafe = axis(&window, 32, 30),
+                .vertical = axis(&window, 18, 16),
+                .fast = window.keys_down[42] or window.keys_down[54],
+                .look_x = axis(&window, 106, 105) * dt * 1.3 + window.look_dx * 0.004,
+                .look_y = axis(&window, 103, 108) * dt * 1.1 - window.look_dy * 0.004,
+                .toggle_view = window.takePressed(46),
+            };
+            if (window.takePressed(35)) show_hud = !show_hud;
+            if (window.takePressed(19)) camera = starting_camera;
+            if (window.takePressed(20)) time_of_day = @mod(time_of_day + 0.125, 1);
+        }
+        if (tour and !tour_step_pending) {
+            const toggle = frames >= limit / 2 and !tour_changed_view;
+            if (toggle) tour_changed_view = true;
+            input = .{ .forward = 0.65, .look_x = 0.0015, .fast = true, .toggle_view = toggle };
+        }
+        const advance = !tour or !tour_step_pending;
+        window.look_dx = 0;
+        window.look_dy = 0;
+        camera.update(&terrain, input, if (capture_path != null or !advance) 0 else dt);
+        if (advance and !frozen and (tour or !window.paused)) {
+            animation_seconds = @mod(animation_seconds + dt, 86400);
+            time_of_day = @mod(time_of_day + dt / 240.0, 1);
+        }
+        if (tour) tour_step_pending = true;
+        landscape.fill(&cells, &terrain, camera.view(&terrain), time_of_day, animation_seconds, show_hud);
         try renderer.draw(&cells, scene.cols, scene.rows);
         cpu_ns += now(clock.CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         wall_ns += now(clock.CLOCK_MONOTONIC) - frame_start;
@@ -107,6 +187,7 @@ fn run(init: std.process.Init.Minimal) !void {
             continue;
         }
         frames = @intCast(renderer.presented_frames);
+        tour_step_pending = false;
         if (frames == 1 and metrics) log("startup_to_first_present_ms={d:.3}\n", .{@as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - started)) / 1e6});
         if (capture_path) |path| {
             if (renderer.capture_pixels.len > 0) {
@@ -114,7 +195,6 @@ fn run(init: std.process.Init.Minimal) !void {
                 break;
             }
         }
-        if (!window.paused and !frozen) tick +%= 1;
         if (limit != 0 and frames >= limit) break;
         // FIFO provides presentation pacing. This caps work on high-refresh displays
         // and when the compositor cannot present (e.g. a hidden window).
@@ -125,6 +205,7 @@ fn run(init: std.process.Init.Minimal) !void {
         log("frames={d} draw_attempts={d} frame_thread_cpu_ms={d:.4} frame_work_wall_ms={d:.4} elapsed_ms={d:.2} key_events={d} pointer_events={d} resizes={d}\n", .{ frames, attempts, @as(f64, @floatFromInt(cpu_ns)) / n / 1e6, @as(f64, @floatFromInt(wall_ns)) / n / 1e6, @as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - started)) / 1e6, window.key_events, window.pointer_events, resize_count });
     }
     if (metrics) {
+        log("view={d:.2},{d:.2},{d:.3},{d:.3},{d:.2} third_person={} time={d:.4}\n", .{ camera.player_x, camera.player_z, camera.yaw, camera.pitch, camera.player_y - @max(terrain_mod.sea_level, terrain.height(camera.player_x, camera.player_z)), camera.third_person, time_of_day });
         if (gpu_samples > 0) log("frame_gpu_ms={d:.4} gpu_samples={d}\n", .{ @as(f64, @floatFromInt(gpu_ns)) / @as(f64, @floatFromInt(gpu_samples)) / 1e6, gpu_samples }) else log("frame_gpu_ms=unavailable\n", .{});
     }
 }
@@ -148,4 +229,13 @@ fn saveCapture(path: [:0]const u8, renderer: *Renderer) !void {
     }
     if (clock.fflush(file) != 0) return error.CaptureWriteFailed;
     log("capture={s} size={d}x{d}\n", .{ path, renderer.capture_width, renderer.capture_height });
+}
+
+fn finiteFloat(text: []const u8) !f32 {
+    const value = try std.fmt.parseFloat(f32, text);
+    if (!std.math.isFinite(value)) return error.NonFiniteArgument;
+    return value;
+}
+fn axis(window: *const platform.Platform, positive: usize, negative: usize) f32 {
+    return @as(f32, @floatFromInt(@intFromBool(window.keys_down[positive]))) - @as(f32, @floatFromInt(@intFromBool(window.keys_down[negative])));
 }

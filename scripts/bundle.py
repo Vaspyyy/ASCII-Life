@@ -29,7 +29,7 @@ base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 exec "$base/lib/ld-linux-x86-64.so.2" --library-path "$base/lib" "$base/ascii-life" "$@"
 ''')
 (bundle / "run").chmod(0o755)
-(bundle / "README.txt").write_text('''ASCII-Life Milestone 0 local runtime bundle.
+(bundle / "README.txt").write_text('''ASCII-Life Milestone 1 local runtime bundle.
 Run ./run inside an active Wayland session.
 Includes the executable and its current ldd library closure, with available
 system package license notices. Generated for the tested x86-64 CachyOS host.
