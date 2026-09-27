@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 1 builds on the native glyph foundation with an explorable seeded landscape. The life simulation is a later milestone.
+Milestone 2 connects the native landscape to drainage, climate, biomes, resource potential, and regenerable local detail. The life simulation is a later milestone.
 
 See:
 
@@ -209,11 +209,13 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 1 landscape.**
+**Pre-alpha / Milestone 2 regional geography.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
 
-Explore a seeded regional heightfield with mountains, forests, water, atmosphere, and first/third-person cameras. The landscape is generated at runtime; no external visual assets are shipped.
+Explore a seeded riverbank landscape with connected tributaries and lakes, climate-dependent vegetation, and first/third-person cameras. Local terrain tiles regenerate identically after eviction. The landscape is generated at runtime; no external visual assets are shipped.
 
-World simulation and RPG systems have not been implemented. Milestone 2 will develop the terrain into coherent geography.
+Generation and inspection tools: [docs/WORLDGEN.md](docs/WORLDGEN.md).
+
+World simulation and RPG systems have not been implemented. Milestone 3 will turn a suitable site into the starting village.

@@ -1,6 +1,6 @@
 # Building and exploring ASCII-Life
 
-Milestone 1 is an explorable, seeded regional landscape. It uses a custom native glyph renderer, with no game engine or external visual assets. NPCs, world history, combat, and persistent gameplay are later milestones.
+Milestone 2 adds connected drainage, climate, biomes, resource potential and deterministic local-detail streaming to the explorable regional landscape. It uses a custom native glyph renderer, with no game engine or external visual assets. NPCs, world history, combat, and persistent gameplay are later milestones.
 
 ## Development environment
 
@@ -45,7 +45,7 @@ The default xdg-shell XML location is `/usr/share/wayland-protocols/stable/xdg-s
 - `--seed N` selects a reproducible region (decimal or `0x` hexadecimal, default `0xa11fe`).
 - `--time F` selects a day fraction in `[0,1)`; `.25` is sunrise, `.5` noon, `.75` sunset. Default `.36`.
 - `--third-person` and `--hide-hud` select the initial camera and label visibility.
-- `--size WIDTHxHEIGHT` selects initial window pixels; default 1920×1080.
+- `--size WIDTHxHEIGHT` selects initial window pixels; default 2560×1440.
 - `--view X,Z,YAW,PITCH,HEIGHT` selects a repeatable development viewpoint. Position/height use metres; yaw/pitch use radians. Height is lift above the standing surface. Yaw zero faces +Z, and positive pitch looks up.
 - `--tour` runs a fixed-step moving-camera benchmark, switching view halfway through; defaults to 600 frames. It cannot be combined with `--capture`.
 
@@ -70,9 +70,9 @@ The ordinary build uses the host's Wayland client library, Vulkan loader, and C 
 
 The runtime bundler writes a fresh `artifacts/ascii-life-runtime` directory and refuses to overwrite an existing bundle. Move an older output aside before rebuilding. This packages the local library closure for measurement; see `docs/SIZE.md` for host assumptions.
 
-## Native visual regression checks
+## Regional generation and native visual regression checks
 
-`./scripts/verify_m1.py` builds an optimized executable and performs native Vulkan captures under validation. It compares repeat runs pixel-for-pixel, exercises seed/time/camera variants, repeats a fixed-step movement tour, and checks invalid CLI inputs. It requires an active Wayland session; `zig build test` remains display-independent.
+`python3 scripts/verify_m2.py` builds an optimized executable, checks six regional seeds headlessly, and performs 1440p native Vulkan captures under validation. It compares repeat runs pixel-for-pixel and exercises the development atlas, alternate seeds, night lighting and third-person views. The earlier `verify_m1.py` remains as historical foundation regression tooling. It requires an active Wayland session; `zig build test` remains display-independent.
 
 ```sh
 mkdir -p artifacts
@@ -83,3 +83,15 @@ mkdir -p artifacts
 ```
 
 Completion reports use 2560 × 1440 measurements; `scripts/measure.py` sets that window size by default. This changes output resolution, not the current 240 × 135 logical glyph field. The full required reporting checklist is in `AGENTS.md`.
+
+
+Milestone 2 inspection:
+
+```sh
+./zig-out/bin/ascii-life --world-report
+./zig-out/bin/ascii-life --atlas --capture artifacts/geography.ppm
+python3 scripts/verify_m2.py --headless-only
+python3 scripts/verify_m2.py
+```
+
+The development atlas exposes generation data for QA. It is not the player's journal or a revealed gameplay map. See [WORLDGEN.md](WORLDGEN.md) for the algorithms, streaming boundary and current limits.

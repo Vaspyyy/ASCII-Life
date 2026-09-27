@@ -261,3 +261,38 @@ Reverified packaging sizes: **120,840 bytes** stripped dynamic ELF; **59,388 byt
 The finite region is **8,192 × 8,192 m (67.108864 km²)**. A full scan of its 1,050,625 cached height samples found peak world Y **1,040.75 m**, or **960.75 m above the water/sea datum at Y=80 m**, for seed `0xa11fe`. Bilinear interpolation cannot exceed the maximum cached corner height. This is the complete region maximum, not a sampled visible ridge or the generator's theoretical height limit.
 
 Raw run logs are `artifacts/m1-1440-static.log` and `artifacts/m1-1440-tour.log`. Historical 1080p measurements above remain unchanged.
+
+## Milestone 2 geography — 2026-09-27
+
+Measured the M2 working tree based on `b6e3d7499a9700a9366e95117c9f59d83c1771b4`, Zig 0.16.0 ReleaseSmall, on the same KDE Wayland / RTX 3070 host. Build/source/shader digest using the M0 procedure: `78999373dac77260c9416344907e21f31fb5aa118fc1231467792a5b297a32e3`. ELF SHA-256: `a6c650bb747651c8e54eb6e65492e1f47fe505aa7d3c03a34662b551a401e927`.
+
+| Distribution | Exact bytes | Change from M1 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 150,504 | +29,664 |
+| ELF compressed with `xz -9` | 73,616 | +14,228 |
+| Runtime bundle payload | 3,642,749 | +29,664 |
+| Runtime bundle `.tar.xz` | 1,272,376 | +13,940 |
+
+No dependencies or external assets were added. The runtime bundle retains the host requirements documented above; it is not fully static. It passed a native 120-frame run from `/tmp` at 2560 × 1440.
+
+Both measured runs presented 600 frames at **2560 × 1440**, seed `0xa11fe`, with 599 GPU samples and no validation layer. The logical field is **240 × 135 (32,400 cells)**. The region remains **8,192 × 8,192 m (67.108864 km²)**. A complete fine-lattice scan found peak world Y **1,040.75 m**, or **960.75 m above sea level**. The hydrology lattice is 257 × 257 at 32 m spacing; streamed terrain uses 8 m samples in 512 m tiles.
+
+| Metric | Stationary | Moving tour |
+| --- | ---: | ---: |
+| Terrain/geography generation | 35.310 ms | 34.792 ms |
+| Main entry → first successful present | 278.154 ms | 199.246 ms |
+| Main-thread CPU/frame | 8.7328 ms | 7.7773 ms |
+| Frame work wall time | 8.7796 ms | 7.8559 ms |
+| GPU command interval | 0.1046 ms | 0.1041 ms |
+| CPU-equivalent FPS (`1000 / CPU ms`) | 114.51 | 128.58 |
+| Steady RSS | 85,548–85,612 KiB | 85,608–85,760 KiB |
+| NVIDIA process graphics memory | 55 MiB | 55 MiB |
+| Tile cache misses / evictions | 22 / 0 | 41 / 0 |
+
+The existing 60 Hz work cap remains. CPU-equivalent FPS is arithmetic main-thread capacity, not measured uncapped presentation throughput. Startup and GPU timings exclude physical scanout. The changed geography and starting view prevent a controlled speed comparison against M1; this records the full new workload. Generation builds macro geography and initial local tiles; later tile costs are included in frame measurements.
+
+The bounded fine-height cache uses 540,800 sample bytes across 64 slots. A 264,196-byte nearby-channel mask reduced a standalone ReleaseFast million-query hydrology benchmark from 545.490 to 331.551 ms with an identical checksum, a 39.2% reduction. Shared row frames also avoid repeated row-wide terrain calculations during tile creation. These are generated transient representations, not shipped assets.
+
+Validation: Debug and ReleaseSmall suites passed, including drainage adjacency, downstream ordering/levels, water conservation, basin filling, climate response, seam agreement, and regeneration after eviction. The eviction test checks a real generated tree's identity. `scripts/verify_m2.py` passed six seeds, repeat reports, and 1440p Vulkan captures for atlas, repeated default, alternate seed, night and third person. Repeated default pixels are byte-identical; captures were validation-layer clean. Day, night, atlas and third-person readbacks were inspected. Logs and images remain under ignored `artifacts/`.
+
+This is regional geography, not planetary generation or life simulation. Channels still reveal the coarse drainage lattice in some views; water and erosion are procedural approximations rather than fluid simulation. The settlement candidate is a suitability result, not an inhabited village. See `WORLDGEN.md` for generation rules and limits.

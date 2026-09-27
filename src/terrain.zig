@@ -1,4 +1,7 @@
 const std = @import("std");
+const hydro_mod = @import("hydrology.zig");
+pub const climate_mod = @import("climate.zig");
+const streaming = @import("streaming.zig");
 
 pub const size: f32 = 8192.0;
 pub const sea_level: f32 = 80.0;
@@ -6,11 +9,11 @@ pub const spawn_x: f32 = 80.0;
 pub const spawn_z: f32 = -370.0;
 pub const spawn_yaw: f32 = 0.0;
 pub const default_seed: u64 = 0xa11fe;
-
 const half_size: f32 = size * 0.5;
 const spacing: f32 = 8.0;
-const sample_side: usize = 1025;
+pub const sample_side: usize = 257;
 const sample_count: usize = sample_side * sample_side;
+const macro_spacing: f32 = 32.0;
 const height_quantum: f32 = 0.25;
 const maximum_height: f32 = 4095.75;
 
@@ -24,69 +27,191 @@ pub const Tree = struct {
     /// 0 is a conifer, 1 is a broadleaf tree.
     kind: u32,
 };
+pub const Place = struct { x: f32 = spawn_x, z: f32 = spawn_z, yaw: f32 = spawn_yaw, score: u16 = 0 };
+pub const Water = hydro_mod.Sample;
 
-/// A finite, seed-stable regional heightfield with an 8 m cached lattice.
-/// The cache is transient; all samples are reconstructed from the seed and
-/// absolute lattice coordinates during initialization.
+/// Compact regional causes plus a bounded, disposable cache of local detail.
 pub const Terrain = struct {
     allocator: std.mem.Allocator,
     seed: u64,
+    generation_seed: u64,
+    repaired: bool,
     samples: []u16,
+    row_frames: []RowFrame,
+    climate: climate_mod.Climate,
+    hydro: hydro_mod.Hydro,
+    cache: *streaming.Cache,
+    start: Place = .{},
+    settlement: Place = .{},
 
     pub fn init(allocator: std.mem.Allocator, seed: u64) !Terrain {
-        @setFloatMode(.strict);
         const samples = try allocator.alloc(u16, sample_count);
         errdefer allocator.free(samples);
-
-        for (0..sample_side) |iz| {
-            const z = @as(f32, @floatFromInt(iz)) * spacing - half_size;
-            const row = samples[iz * sample_side ..][0..sample_side];
-            const frame = rowFrame(seed, z);
-            for (0..sample_side) |ix| {
-                const x = @as(f32, @floatFromInt(ix)) * spacing - half_size;
-                row[ix] = quantizeHeight(generateHeight(seed, x, z, frame));
-            }
-        }
-
-        return .{ .allocator = allocator, .seed = seed, .samples = samples };
+        generateMacro(seed, samples);
+        const generation_seed = try repairMacro(seed, samples);
+        const row_frames = try allocator.alloc(RowFrame, 1025);
+        errdefer allocator.free(row_frames);
+        for (row_frames, 0..) |*frame, i| frame.* = rowFrame(generation_seed, @as(f32, @floatFromInt(i)) * 8 - half_size);
+        var climate = try climate_mod.Climate.init(allocator, generation_seed, samples);
+        errdefer climate.deinit();
+        var hydro = try hydro_mod.Hydro.init(allocator, generation_seed, samples, climate.rainfall);
+        errdefer hydro.deinit();
+        try hydro.validate();
+        const cache = try allocator.create(streaming.Cache);
+        errdefer allocator.destroy(cache);
+        cache.* = try streaming.Cache.init(allocator);
+        errdefer cache.deinit();
+        var result = Terrain{ .allocator = allocator, .seed = seed, .generation_seed = generation_seed, .repaired = generation_seed != seed, .samples = samples, .row_frames = row_frames, .climate = climate, .hydro = hydro, .cache = cache };
+        result.choosePlaces();
+        result.refineStart();
+        return result;
     }
 
     pub fn deinit(self: *Terrain) void {
+        self.cache.deinit();
+        self.allocator.destroy(self.cache);
+        self.hydro.deinit();
+        self.climate.deinit();
         self.allocator.free(self.samples);
+        self.allocator.free(self.row_frames);
         self.* = undefined;
     }
 
-    /// Bilinear sample of the cached 8 m heightfield. Coordinates outside the
-    /// finite region use the nearest edge, so the field remains bounded.
     pub fn height(self: *const Terrain, x: f32, z: f32) f32 {
-        @setFloatMode(.strict);
-        const cx = std.math.clamp(x, -half_size, half_size);
-        const cz = std.math.clamp(z, -half_size, half_size);
-        const sx = (cx + half_size) / spacing;
-        const sz = (cz + half_size) / spacing;
-        const x0 = @min(@as(usize, @intFromFloat(@floor(sx))), sample_side - 1);
-        const z0 = @min(@as(usize, @intFromFloat(@floor(sz))), sample_side - 1);
-        const x1 = @min(x0 + 1, sample_side - 1);
-        const z1 = @min(z0 + 1, sample_side - 1);
-        const tx = sx - @as(f32, @floatFromInt(x0));
-        const tz = sz - @as(f32, @floatFromInt(z0));
-
-        const h00 = decodeHeight(self.samples[z0 * sample_side + x0]);
-        const h10 = decodeHeight(self.samples[z0 * sample_side + x1]);
-        const h01 = decodeHeight(self.samples[z1 * sample_side + x0]);
-        const h11 = decodeHeight(self.samples[z1 * sample_side + x1]);
-        const north = h00 + (h10 - h00) * tx;
-        const south = h01 + (h11 - h01) * tx;
-        return north + (south - north) * tz;
+        return self.cache.height(self, generateDetail, x, z);
     }
 
-    /// Upward-facing normal estimated from the cached field.
+    pub fn macroHeight(self: *const Terrain, x: f32, z: f32) f32 {
+        const sx = std.math.clamp((x + half_size) / macro_spacing, 0, 256);
+        const sz = std.math.clamp((z + half_size) / macro_spacing, 0, 256);
+        const ix: usize = @intFromFloat(@floor(sx));
+        const iz: usize = @intFromFloat(@floor(sz));
+        const nx = @min(ix + 1, 256);
+        const nz = @min(iz + 1, 256);
+        const tx = sx - @as(f32, @floatFromInt(ix));
+        const tz = sz - @as(f32, @floatFromInt(iz));
+        return mix(mix(decodeHeight(self.samples[iz * sample_side + ix]), decodeHeight(self.samples[iz * sample_side + nx]), tx), mix(decodeHeight(self.samples[nz * sample_side + ix]), decodeHeight(self.samples[nz * sample_side + nx]), tx), tz);
+    }
+
+    pub fn water(self: *const Terrain, x: f32, z: f32) Water {
+        return self.hydro.sample(x, z);
+    }
+
+    pub fn standingHeight(self: *const Terrain, x: f32, z: f32) f32 {
+        const bed = self.height(x, z);
+        const w = self.water(x, z);
+        return if (w.wet) @max(bed, w.water_y) else bed;
+    }
+
+    /// Only visual sampling uses distant macro LOD. Physical positions and tree
+    /// identities always use the same fine field, regardless of view distance.
+    pub fn renderHeight(self: *const Terrain, x: f32, z: f32, depth: f32, w: Water) f32 {
+        if (depth <= 800) return self.height(x, z);
+        const coarse = carve(self.macroHeight(x, z), w);
+        if (depth >= 1000) return coarse;
+        return mix(self.height(x, z), coarse, (depth - 800) / 200);
+    }
+
+    pub fn geography(self: *const Terrain, x: f32, z: f32, w: Water) climate_mod.Sample {
+        const distance: ?f32 = if (w.wet) 0 else if (std.math.isFinite(w.river_distance)) @max(0, w.river_distance - w.river_width * 0.5) else null;
+        var geo = self.climate.sampleWithWater(x, z, distance);
+        if (w.wet) {
+            geo.biome = .water;
+            geo.resources = .{ .fertility = 0, .timber = 0, .stone = 0, .ore = 0 };
+        }
+        return geo;
+    }
+
     pub fn normal(self: *const Terrain, x: f32, z: f32) [3]f32 {
-        @setFloatMode(.strict);
         const dx = (self.height(x + spacing, z) - self.height(x - spacing, z)) / (spacing * 2.0);
         const dz = (self.height(x, z + spacing) - self.height(x, z - spacing)) / (spacing * 2.0);
         const length = @sqrt(dx * dx + 1.0 + dz * dz);
         return .{ -dx / length, 1.0 / length, -dz / length };
+    }
+
+    pub fn renderNormal(self: *const Terrain, x: f32, z: f32, depth: f32) [3]f32 {
+        if (depth < 1000) return self.normal(x, z);
+        const dx = (self.macroHeight(x + 16, z) - self.macroHeight(x - 16, z)) / 32;
+        const dz = (self.macroHeight(x, z + 16) - self.macroHeight(x, z - 16)) / 32;
+        const magnitude = @sqrt(dx * dx + 1 + dz * dz);
+        return .{ -dx / magnitude, 1 / magnitude, -dz / magnitude };
+    }
+
+    pub fn peak(self: *const Terrain) f32 {
+        var highest: f32 = 0;
+        for (0..1025) |iz| for (0..1025) |ix| {
+            highest = @max(highest, self.height(@as(f32, @floatFromInt(ix)) * 8 - half_size, @as(f32, @floatFromInt(iz)) * 8 - half_size));
+        };
+        return highest;
+    }
+
+    fn choosePlaces(self: *Terrain) void {
+        var best: f32 = -1;
+        var strongest: f32 = -1;
+        // Candidates derive from drainage, slope, food potential, and water.
+        // This reserves a plausible future village site; it creates no village.
+        for (2..sample_side - 2) |iz| for (2..sample_side - 2) |ix| {
+            const x = @as(f32, @floatFromInt(ix)) * macro_spacing - half_size;
+            const z = @as(f32, @floatFromInt(iz)) * macro_spacing - half_size;
+            const w = self.water(x, z);
+            if (w.kind != .river or w.river_strength < 0.1) continue;
+            const bank = w.river_width * 0.5 + 20;
+            const bx = x + w.flow_z * bank;
+            const bz = z - w.flow_x * bank;
+            const bw = self.water(bx, bz);
+            if (bw.wet or @abs(bx) > 3800 or @abs(bz) > 3800) continue;
+            const h = self.macroHeight(bx, bz);
+            const grade = @abs(self.macroHeight(bx + 32, bz) - self.macroHeight(bx - 32, bz)) / 64 + @abs(self.macroHeight(bx, bz + 32) - self.macroHeight(bx, bz - 32)) / 64;
+            const geo = self.geography(bx, bz, bw);
+            const suitability = @as(f32, @floatFromInt(geo.resources.fertility)) * @max(0, 1 - grade * 3) / (1 + @max(0, h - 150) / 200);
+            const place = Place{ .x = bx, .z = bz, .yaw = std.math.atan2(w.flow_x, w.flow_z), .score = @intFromFloat(@max(0, suitability)) };
+            if (suitability > best) {
+                best = suitability;
+                self.settlement = place;
+            }
+            const vista = w.river_strength * 100 / (1 + @abs(h - 135) / 100) / (1 + grade) / (1 + @abs(z) / 1800);
+            if (vista > strongest) {
+                strongest = vista;
+                self.start = place;
+            }
+        };
+    }
+
+    fn refineStart(self: *Terrain) void {
+        const original = self.start;
+        const fx = @sin(original.yaw);
+        const fz = @cos(original.yaw);
+        var best_score: f32 = -1e6;
+        for (0..17) |step| {
+            const offset = (@as(f32, @floatFromInt(step)) - 8) * 12;
+            const x = original.x + fx * offset;
+            const z = original.z + fz * offset;
+            const water_here = self.water(x, z);
+            const bank_distance = water_here.river_distance - water_here.river_width * 0.5;
+            if (water_here.wet or bank_distance < 8 or bank_distance > 40 or self.normal(x, z)[1] < 0.88) continue;
+            var clearance: f32 = 60;
+            const gx: i32 = @intFromFloat(@floor(x / 24));
+            const gz: i32 = @intFromFloat(@floor(z / 24));
+            var dz: i32 = -3;
+            while (dz <= 3) : (dz += 1) {
+                var dx: i32 = -3;
+                while (dx <= 3) : (dx += 1) {
+                    if (self.tree(gx + dx, gz + dz)) |t| {
+                        const tx = t.x - x;
+                        const tz = t.z - z;
+                        if (tx * fx + tz * fz > -4) clearance = @min(clearance, @sqrt(tx * tx + tz * tz) - t.radius);
+                    }
+                }
+            }
+            const score = clearance - @abs(offset) * 0.02;
+            if (score > best_score) {
+                best_score = score;
+                self.start.x = x;
+                self.start.z = z;
+                // Look slightly into the channel while retaining its downstream view.
+                self.start.yaw = original.yaw - 0.20;
+            }
+        }
     }
 
     /// Generate a stable tree from its signed 24 m lattice identity. Grid
@@ -103,18 +228,21 @@ pub const Terrain = struct {
         if (x < -half_size or x > half_size or z < -half_size or z > half_size) return null;
 
         const ground = self.height(x, z);
-        if (ground <= sea_level + 4.0 or ground > 780.0) return null;
+        const water_here = self.water(x, z);
+        if (water_here.wet or ground > 900.0) return null;
+        const geo = self.geography(x, z, water_here);
+        if (geo.resources.timber < 25) return null;
         const up = self.normal(x, z)[1];
         if (up < 0.68) return null;
 
         const broad_forest = valueNoise2(self.seed, x, z, 720.0, 0x666f726573742d61);
         const local_forest = valueNoise2(self.seed, x, z, 240.0, 0x666f726573742d62);
-        const forest_density = std.math.clamp(0.60 + 0.27 * broad_forest + 0.17 * local_forest, 0.16, 0.96);
+        const forest_density = std.math.clamp((0.35 + 0.20 * broad_forest + 0.17 * local_forest) * @as(f32, @floatFromInt(geo.resources.timber)) / 100, 0.02, 0.94);
         const choice = unitFloat(identity);
         if (choice > forest_density * 0.74) return null;
 
         const species_roll = hash2(self.seed, ix, iz, 0x747265652d6b696e);
-        const kind: u32 = if (ground < 380.0 and species_roll % 100 < 39) 1 else 0;
+        const kind: u32 = if (geo.temperature_tenths_c > 90 and species_roll % 100 < 65) 1 else 0;
         const size_roll = unitFloat(hash2(self.seed, ix, iz, 0x747265652d73697a));
         const tree_height = if (kind == 0) 10.0 + 12.0 * size_roll else 7.0 + 8.0 * size_roll;
         const radius = if (kind == 0) 2.3 + 3.5 * size_roll else 3.0 + 4.2 * size_roll;
@@ -290,64 +418,104 @@ fn sampleFingerprint(samples: []const u16) u64 {
     return fingerprint;
 }
 
-test "heightfield cache reproduces the same seed and distinguishes world identities" {
+fn generateMacro(seed: u64, samples: []u16) void {
+    for (0..sample_side) |iz| {
+        const z = @as(f32, @floatFromInt(iz)) * macro_spacing - half_size;
+        const frame = rowFrame(seed, z);
+        for (0..sample_side) |ix| {
+            const x = @as(f32, @floatFromInt(ix)) * macro_spacing - half_size;
+            samples[iz * sample_side + ix] = quantizeHeight(generateHeight(seed, x, z, frame));
+        }
+    }
+}
+
+fn validMacro(samples: []const u16) bool {
+    var water_count: usize = 0;
+    var peak_value: u16 = 0;
+    for (samples) |v| {
+        if (v < 320) water_count += 1;
+        peak_value = @max(peak_value, v);
+    }
+    return water_count > samples.len / 100 and water_count < samples.len / 2 and peak_value > 2000;
+}
+
+fn repairMacro(seed: u64, samples: []u16) !u64 {
+    if (validMacro(samples)) return seed;
+    for (1..9) |attempt| {
+        const candidate = hash2(seed, @intCast(attempt), 0, 0x7265706169722d32);
+        generateMacro(candidate, samples);
+        if (validMacro(samples)) return candidate;
+    }
+    return error.InvalidMacroGeography;
+}
+
+fn generateDetail(context: *const anyopaque, x: f32, z: f32) f32 {
+    const self: *const Terrain = @ptrCast(@alignCast(context));
+    const raw = generateHeight(self.generation_seed, x, z, self.row_frames[@min(1024, @as(usize, @intFromFloat((z + half_size) / 8)))]);
+    return carve(raw, self.water(x, z));
+}
+
+fn carve(raw: f32, w: Water) f32 {
+    if (w.kind == .ocean or w.kind == .lake) return raw;
+    if (!std.math.isFinite(w.river_distance) or w.river_width <= 0) return raw;
+    const half_width = w.river_width * 0.5;
+    const bank_distance = @max(0, w.river_distance - half_width);
+    if (bank_distance > 24) return raw;
+    const channel_floor = @max(0, w.water_y - 2.0 - w.river_strength * 3);
+    const blend = fade(std.math.clamp(bank_distance / 24, 0, 1));
+    return @min(raw, mix(channel_floor, @max(raw, channel_floor), blend));
+}
+
+test "macro identity, deterministic repair and riverbank starting site" {
     var a = try Terrain.init(std.testing.allocator, default_seed);
     defer a.deinit();
     var b = try Terrain.init(std.testing.allocator, default_seed);
     defer b.deinit();
-    var other = try Terrain.init(std.testing.allocator, default_seed + 1);
-    defer other.deinit();
-
     try std.testing.expectEqualSlices(u16, a.samples, b.samples);
-    try std.testing.expect(!std.mem.eql(u16, a.samples, other.samples));
-    try std.testing.expectEqual(@as(u64, 0x19136d4cd87eabe7), sampleFingerprint(a.samples));
-    try std.testing.expectApproxEqAbs(a.height(spawn_x, spawn_z), b.height(spawn_x, spawn_z), 0.0);
-
-    const spawn_height = a.height(spawn_x, spawn_z);
-    try std.testing.expect(spawn_height >= sea_level and spawn_height <= 115.0);
-    try std.testing.expect(a.height(450.0, spawn_z) < sea_level);
-    var ridge_peak: f32 = 0.0;
-    for (0..501) |ix| {
-        const x = -1200.0 + @as(f32, @floatFromInt(ix)) * spacing;
-        ridge_peak = @max(ridge_peak, a.height(x, spawn_z));
-    }
-    try std.testing.expect(ridge_peak > 600.0);
+    try std.testing.expectEqual(a.start, b.start);
+    try std.testing.expect(validMacro(a.samples));
+    try std.testing.expect(!a.water(a.start.x, a.start.z).wet);
+    try std.testing.expect(a.settlement.score > 0);
+    @memset(b.samples, 0);
+    const repaired_seed = try repairMacro(default_seed, b.samples);
+    try std.testing.expect(repaired_seed != default_seed);
+    try std.testing.expect(validMacro(b.samples));
+    const fingerprint = sampleFingerprint(b.samples);
+    @memset(b.samples, 0);
+    try std.testing.expectEqual(repaired_seed, try repairMacro(default_seed, b.samples));
+    try std.testing.expectEqual(fingerprint, sampleFingerprint(b.samples));
 }
 
-test "heightfield edges are finite and normals point upward" {
+test "fine terrain and tree identities survive cache eviction" {
     var terrain = try Terrain.init(std.testing.allocator, 42);
     defer terrain.deinit();
-
-    try std.testing.expect(terrain.height(-half_size, -half_size) >= 0.0);
-    try std.testing.expectEqual(terrain.height(-half_size, half_size), terrain.height(-half_size - 1000.0, half_size + 1000.0));
-    try std.testing.expectEqual(terrain.height(half_size, -half_size), terrain.height(half_size + 1000.0, -half_size - 1000.0));
-    const n = terrain.normal(0.0, 0.0);
-    try std.testing.expect(n[1] > 0.0);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), n[0] * n[0] + n[1] * n[1] + n[2] * n[2], 0.0001);
-}
-
-test "tree identities remain stable and use the terrain surface" {
-    var terrain = try Terrain.init(std.testing.allocator, 0x747265652d736565);
-    defer terrain.deinit();
-
-    var found: ?Tree = null;
-    var coord: [2]i32 = .{ 0, 0 };
-    for (0..121) |iz| {
-        const gz: i32 = @as(i32, @intCast(iz)) - 60;
-        for (0..121) |ix| {
-            const gx: i32 = @as(i32, @intCast(ix)) - 60;
-            if (terrain.tree(gx, gz)) |candidate| {
-                found = candidate;
-                coord = .{ gx, gz };
-                break;
+    const x: f32 = -732;
+    const z: f32 = -582;
+    const before = terrain.height(x, z);
+    var tree_before: ?Tree = null;
+    var tree_x: i32 = 0;
+    var tree_z: i32 = 0;
+    const center_x: i32 = @intFromFloat(@floor(terrain.start.x / 24));
+    const center_z: i32 = @intFromFloat(@floor(terrain.start.z / 24));
+    search: for (0..25) |iz| {
+        for (0..25) |ix| {
+            const gx = center_x + @as(i32, @intCast(ix)) - 12;
+            const gz = center_z + @as(i32, @intCast(iz)) - 12;
+            if (terrain.tree(gx, gz)) |tree| {
+                tree_before = tree;
+                tree_x = gx;
+                tree_z = gz;
+                break :search;
             }
         }
-        if (found != null) break;
     }
-    try std.testing.expect(found != null);
-    const first = found.?;
-    const again = terrain.tree(coord[0], coord[1]).?;
-    try std.testing.expectEqual(first, again);
-    try std.testing.expectApproxEqAbs(terrain.height(first.x, first.z), first.ground, 0.01);
-    try std.testing.expect(first.kind <= 1);
+    try std.testing.expect(tree_before != null);
+    for (0..16) |iz| for (0..16) |ix| {
+        _ = terrain.height(-4080 + @as(f32, @floatFromInt(ix)) * 512, -4080 + @as(f32, @floatFromInt(iz)) * 512);
+    };
+    try std.testing.expectEqual(before, terrain.height(x, z));
+    try std.testing.expectEqual(tree_before, terrain.tree(tree_x, tree_z));
+    try std.testing.expectEqual(terrain.height(-4096, 4096), terrain.height(-5000, 5000));
+    const normal = terrain.normal(x, z);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2], 0.001);
 }

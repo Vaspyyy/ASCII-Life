@@ -270,9 +270,10 @@ fn paintTerrain(
         while (depth <= max_view_depth and top >= 0) {
             const world_x = view.x + ray_x * depth;
             const world_z = view.z + ray_z * depth;
-            const raw_height = terrain.height(world_x, world_z);
-            const is_water = raw_height < terrain_mod.sea_level;
-            const surface_height = if (is_water) terrain_mod.sea_level else raw_height;
+            const water = terrain.water(world_x, world_z);
+            const raw_height = terrain.renderHeight(world_x, world_z, depth, water);
+            const is_water = water.wet and raw_height < water.water_y;
+            const surface_height = if (is_water) water.water_y else raw_height;
             const projected = sky.horizon_y - (surface_height - view.y) * vertical_focal / depth;
             const projected_row = @as(i32, @intFromFloat(@floor(projected)));
 
@@ -280,8 +281,8 @@ fn paintTerrain(
                 const normal = if (is_water)
                     waterNormal(world_x, world_z, animation)
                 else
-                    terrain.normal(world_x, world_z);
-                const surface = makeSurface(raw_height, normal, world_x, world_z, depth, view, sky, animation);
+                    terrain.renderNormal(world_x, world_z, depth);
+                const surface = makeSurface(raw_height, normal, world_x, world_z, depth, view, sky, animation, water, terrain.geography(world_x, world_z, water));
                 const first = @max(0, projected_row);
                 const last = @min(@as(i32, @intCast(scene.rows)) - 1, top);
                 if (first <= last) {
@@ -321,18 +322,19 @@ const Surface = struct {
     material: Material,
     normal: [3]f32,
     water_shimmer: f32,
+    flow_glyph: u32,
     steep: bool,
 };
 
-fn makeSurface(raw_height: f32, normal: [3]f32, x: f32, z: f32, depth: f32, view: View, sky: Sky, animation: f32) Surface {
-    const sea = terrain_mod.sea_level;
-    const material: Material = if (raw_height < sea)
+fn makeSurface(raw_height: f32, normal: [3]f32, x: f32, z: f32, depth: f32, view: View, sky: Sky, animation: f32, water: terrain_mod.Water, geo: terrain_mod.climate_mod.Sample) Surface {
+    const sea = if (water.wet) water.water_y else terrain_mod.sea_level;
+    const material: Material = if (water.wet and raw_height < sea)
         .water
-    else if (raw_height < sea + 17.0)
+    else if ((raw_height < terrain_mod.sea_level + 8) or (!water.wet and water.river_distance < water.river_width * 0.5 + 5))
         .shore
-    else if (raw_height > sea + 470.0)
+    else if (geo.biome == .snowfield)
         .snow
-    else if (normal[1] < 0.77 or raw_height > sea + 245.0)
+    else if (normal[1] < 0.77 or geo.biome == .alpine)
         .rock
     else
         .grass;
@@ -387,7 +389,7 @@ fn makeSurface(raw_height: f32, normal: [3]f32, x: f32, z: f32, depth: f32, view
                 2 => scene.rgb(132, 132, 91),
                 else => scene.rgb(94, 128, 102),
             };
-            base = mixColor(low, high, altitude);
+            base = mixColor(mixColor(low, high, altitude), biomeColor(geo.biome), 0.68);
         },
         .rock => {
             const upland = smooth(sea + 170.0, sea + 420.0, raw_height);
@@ -414,7 +416,10 @@ fn makeSurface(raw_height: f32, normal: [3]f32, x: f32, z: f32, depth: f32, view
     const atmospheric = mixColor(sky.fog_color, scene.rgb(107, 145, 167), 0.25);
     base = mixColor(base, atmospheric, fog);
     const highlight = mixColor(base, scene.rgb(231, 219, 187), if (material == .snow) 0.28 else 0.22);
-    return .{ .color = base, .highlight = highlight, .material = material, .normal = normal, .water_shimmer = water_shimmer, .steep = steep };
+    const flow_side = water.flow_x * @cos(view.yaw) - water.flow_z * @sin(view.yaw);
+    const flow_forward = water.flow_x * @sin(view.yaw) + water.flow_z * @cos(view.yaw);
+    const flow_glyph: u32 = if (water.kind != .river) '~' else if (@abs(flow_side) > @abs(flow_forward) * 1.5) '-' else if (@abs(flow_forward) > @abs(flow_side) * 1.5) '|' else if (flow_side * flow_forward > 0) '/' else '\\';
+    return .{ .color = base, .highlight = highlight, .material = material, .normal = normal, .water_shimmer = water_shimmer, .flow_glyph = flow_glyph, .steep = steep };
 }
 
 fn surfaceCell(surface: Surface, detail: u32, edge: bool, x: usize, y: usize, depth: f32, sky: Sky, animation: f32) scene.Cell {
@@ -435,7 +440,7 @@ fn surfaceCell(surface: Surface, detail: u32, edge: bool, x: usize, y: usize, de
                 glyph = if (detail % 3 == 0) '=' else '~';
                 fg = mixColor(surface.highlight, scene.rgb(255, 229, 177), surface.water_shimmer * 1.8);
             } else if (textured and (detail +% @as(u32, @intCast(x + y)) +% @as(u32, @bitCast(phase))) % 3 != 0) {
-                glyph = if (detail % 5 == 0) '=' else '~';
+                glyph = if (detail % 5 == 0) '=' else surface.flow_glyph;
                 fg = mixColor(surface.highlight, scene.rgb(170, 211, 205), 0.30);
             }
         },
@@ -522,7 +527,7 @@ fn drawTree(cells: []scene.Cell, depth_buffer: []f32, view: View, sky: Sky, tree
     if (@abs(lateral) > forward * 1.24 + tree.radius * 2.0) return;
 
     const center_x = cols_f * 0.5 + lateral * horizontal_focal / forward;
-    const ground_y = @max(tree.ground, terrain_mod.sea_level);
+    const ground_y = tree.ground;
     const top_y = sky.horizon_y - (ground_y + tree.height - view.y) * vertical_focal / forward;
     const base_y = sky.horizon_y - (ground_y - view.y) * vertical_focal / forward;
     if (base_y < -2 or top_y > rows_f + 2 or top_y >= base_y) return;
@@ -563,7 +568,7 @@ fn drawTree(cells: []scene.Cell, depth_buffer: []f32, view: View, sky: Sky, tree
         } else {
             half_width = @max(0.25, projected_radius * 0.15);
         }
-        const row_radius: i32 = @intFromFloat(@min(23.0, @ceil(half_width)));
+        const row_radius: i32 = @intFromFloat(@min(cols_f, @ceil(half_width)));
         var sx = center_col - row_radius;
         while (sx <= center_col + row_radius) : (sx += 1) {
             if (sx < 0 or sx >= @as(i32, @intCast(scene.cols))) continue;
@@ -610,7 +615,7 @@ fn paintExplorer(cells: []scene.Cell, depth_buffer: []f32, terrain: *const Terra
     const lateral = rel_x * cos_yaw - rel_z * sin_yaw;
     if (@abs(lateral) > forward * 1.16) return;
 
-    const ground = @max(view.player_y, @max(terrain_mod.sea_level, terrain.height(view.player_x, view.player_z)));
+    const ground = @max(view.player_y, terrain.standingHeight(view.player_x, view.player_z));
     const figure_height: f32 = 1.76;
     const center_x = cols_f * 0.5 + lateral * horizontal_focal / forward;
     const top_y = sky.horizon_y - (ground + figure_height - view.y) * vertical_focal / forward;
@@ -687,7 +692,7 @@ fn paintHud(cells: []scene.Cell, time: f32) void {
     const top_width: usize = @min(scene.cols - 4, 43);
     panel(cells, 2, 2, top_width, 5, scene.rgb(10, 21, 27), 0.78);
     scene.label(cells, 4, 3, "A LIFE", scene.rgb(244, 226, 190));
-    scene.label(cells, 4, 5, "THE FIRST LIGHT / MILESTONE 01", scene.rgb(177, 202, 205));
+    scene.label(cells, 4, 5, "RIVERS AND RANGES / MILESTONE 02", scene.rgb(177, 202, 205));
 
     const bottom_y = scene.rows - 4;
     const bottom_height: usize = 3;
@@ -805,4 +810,55 @@ test "landscape fill is repeatable for an explicit view and animation time" {
     fill(second, &terrain, view, 0.36, 12.5, false);
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(first), std.mem.sliceAsBytes(second));
     for (first) |cell| try std.testing.expect(cell.glyph < scene.glyph_bits.len);
+}
+
+fn biomeColor(biome: terrain_mod.climate_mod.Biome) u32 {
+    return switch (biome) {
+        .water => scene.rgb(49, 112, 146),
+        .shore => scene.rgb(158, 146, 109),
+        .woodland => scene.rgb(46, 108, 66),
+        .grassland => scene.rgb(113, 144, 78),
+        .scrub, .steppe => scene.rgb(137, 133, 82),
+        .desert => scene.rgb(188, 153, 104),
+        .savanna => scene.rgb(168, 153, 83),
+        .alpine => scene.rgb(123, 134, 126),
+        .tundra => scene.rgb(123, 141, 121),
+        .snowfield => scene.rgb(215, 226, 226),
+        .wetland => scene.rgb(56, 124, 101),
+    };
+}
+
+/// Developer atlas exposes generated causes for QA; it is not the player's map
+/// or journal, which will only reveal information learned during play.
+pub fn fillAtlas(cells: []scene.Cell, terrain: *const Terrain, view: View) void {
+    for (cells) |*cell| cell.* = .{ .glyph = ' ', .foreground = scene.rgb(170, 194, 178), .background = scene.rgb(12, 21, 28) };
+    const map_side: usize = scene.rows - 10;
+    const offset: usize = 4;
+    for (0..map_side) |iz| for (0..map_side) |ix| {
+        const x = -4096 + (@as(f32, @floatFromInt(ix)) + 0.5) * 8192 / @as(f32, @floatFromInt(map_side));
+        const z = 4096 - (@as(f32, @floatFromInt(iz)) + 0.5) * 8192 / @as(f32, @floatFromInt(map_side));
+        const water = terrain.water(x, z);
+        const geo = terrain.geography(x, z, water);
+        const elevation = terrain.macroHeight(x, z);
+        const color = if (water.wet) scene.rgb(48, 126, 171) else biomeColor(geo.biome);
+        var glyph: u32 = if (water.wet) '~' else if (geo.biome == .woodland) '^' else if (elevation > 500) '/' else '.';
+        if (!water.wet and water.river_distance < 24) glyph = '~';
+        cells[(iz + 6) * scene.cols + ix + offset] = .{ .glyph = glyph, .foreground = if (glyph == '~') scene.rgb(130, 207, 234) else gainColor(color, 1.35, 1.35, 1.35), .background = gainColor(color, 0.55 + elevation / 1800, 0.55 + elevation / 1800, 0.55 + elevation / 1800) };
+    };
+    const px: usize = @intFromFloat(std.math.clamp((view.player_x + 4096) / 8192 * @as(f32, @floatFromInt(map_side)), 0, @as(f32, @floatFromInt(map_side - 1))));
+    const pz: usize = @intFromFloat(std.math.clamp((4096 - view.player_z) / 8192 * @as(f32, @floatFromInt(map_side)), 0, @as(f32, @floatFromInt(map_side - 1))));
+    cells[(pz + 6) * scene.cols + px + offset] = .{ .glyph = '@', .foreground = scene.rgb(255, 236, 175), .background = scene.rgb(59, 42, 36) };
+    scene.label(cells, 4, 2, "REGIONAL GEOGRAPHY / DEVELOPMENT ATLAS", scene.rgb(241, 225, 183));
+    scene.label(cells, 4, 4, "NORTH UP / 8.192 KM SQUARE", scene.rgb(174, 198, 196));
+    const lx = map_side + 10;
+    scene.label(cells, lx, 10, "RAINFALL FEEDS DRAINAGE", scene.rgb(160, 202, 223));
+    scene.label(cells, lx, 13, "~ RIVERS / LAKES / SEA", scene.rgb(130, 207, 234));
+    scene.label(cells, lx, 16, "^ WOODLAND", biomeColor(.woodland));
+    scene.label(cells, lx, 19, ". GRASSLAND / SCRUB", biomeColor(.grassland));
+    scene.label(cells, lx, 22, "/ ALPINE / SNOW", biomeColor(.snowfield));
+    scene.label(cells, lx, 25, "@ CURRENT VIEWPOINT", scene.rgb(255, 236, 175));
+    scene.label(cells, lx, 31, "COAST + WIND + ALTITUDE", scene.rgb(211, 204, 178));
+    scene.label(cells, lx, 34, "DETERMINE CLIMATE", scene.rgb(211, 204, 178));
+    scene.label(cells, lx, 40, "UNTOUCHED DETAIL REBUILDS", scene.rgb(174, 198, 196));
+    scene.label(cells, lx, 43, "AFTER TILE EVICTION", scene.rgb(174, 198, 196));
 }

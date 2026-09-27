@@ -45,13 +45,13 @@ pub const Camera = struct {
     third_person: bool = false,
 
     pub fn init(terrain: *const Terrain) Camera {
-        const x = clampWorld(terrain_mod.spawn_x);
-        const z = clampWorld(terrain_mod.spawn_z);
+        const x = clampWorld(terrain.start.x);
+        const z = clampWorld(terrain.start.z);
         return .{
             .player_x = x,
             .player_y = groundHeight(terrain, x, z),
             .player_z = z,
-            .yaw = terrain_mod.spawn_yaw,
+            .yaw = terrain.start.yaw,
             .pitch = 0.10,
         };
     }
@@ -220,7 +220,7 @@ fn clampWorld(value: f32) f32 {
 }
 
 fn groundHeight(terrain: *const Terrain, x: f32, z: f32) f32 {
-    return @max(terrain_mod.sea_level, terrain.height(x, z));
+    return terrain.standingHeight(x, z);
 }
 
 fn boomIsClear(
@@ -249,6 +249,7 @@ test "movement, turning, and pitch are frame independent and bounded" {
     defer terrain.deinit();
 
     var camera = Camera.init(&terrain);
+    camera.yaw = 0;
     const start_x = camera.player_x;
     const start_z = camera.player_z;
 
@@ -261,6 +262,8 @@ test "movement, turning, and pitch are frame independent and bounded" {
 
     var partition_a = Camera.init(&terrain);
     var partition_b = Camera.init(&terrain);
+    partition_a.setPose(&terrain, 0, 0, 0, 0, 0);
+    partition_b.setPose(&terrain, 0, 0, 0, 0, 0);
     const diagonal = Input{ .forward = 0.6, .strafe = 0.8 };
     for (0..10) |_| partition_a.update(&terrain, diagonal, 0.1);
     for (0..60) |_| partition_b.update(&terrain, diagonal, 1.0 / 60.0);

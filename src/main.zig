@@ -56,8 +56,10 @@ fn run(init: std.process.Init.Minimal) !void {
     var show_hud = true;
     var third_person = false;
     var tour = false;
-    var width: u32 = 1920;
-    var height: u32 = 1080;
+    var atlas = false;
+    var world_report = false;
+    var width: u32 = 2560;
+    var height: u32 = 1440;
     var pose: ?[5]f32 = null;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--metrics")) metrics = true else if (std.mem.eql(u8, arg, "--static")) frozen = true else if (std.mem.eql(u8, arg, "--capture")) {
@@ -75,6 +77,10 @@ fn run(init: std.process.Init.Minimal) !void {
             third_person = true;
         } else if (std.mem.eql(u8, arg, "--hide-hud")) {
             show_hud = false;
+        } else if (std.mem.eql(u8, arg, "--atlas")) {
+            atlas = true;
+        } else if (std.mem.eql(u8, arg, "--world-report")) {
+            world_report = true;
         } else if (std.mem.eql(u8, arg, "--tour")) {
             tour = true;
         } else if (std.mem.eql(u8, arg, "--size")) {
@@ -89,7 +95,7 @@ fn run(init: std.process.Init.Minimal) !void {
             if (values.next() != null or @abs(v[0]) > 4096 or @abs(v[1]) > 4096 or @abs(v[2]) > 100 or @abs(v[3]) > 2 or v[4] < 0 or v[4] > 1500) return error.InvalidView;
             pose = v;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            log("ASCII-Life / Milestone 1\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze sun and water animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T advance daylight / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
+            log("ASCII-Life / Milestone 2\n--atlas        Developer geography overview\n--world-report Headless geography validation and peak scan\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze sun and water animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T advance daylight / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
             return;
         } else return error.UnknownArgument;
     }
@@ -98,6 +104,10 @@ fn run(init: std.process.Init.Minimal) !void {
     const generation_start = now(clock.CLOCK_MONOTONIC);
     var terrain = try terrain_mod.Terrain.init(std.heap.page_allocator, seed);
     defer terrain.deinit();
+    if (world_report) {
+        try reportWorld(&terrain);
+        return;
+    }
     var camera = Camera.init(&terrain);
     camera.third_person = third_person;
     if (pose) |v| camera.setPose(&terrain, v[0], v[1], v[2], v[3], v[4]);
@@ -173,7 +183,7 @@ fn run(init: std.process.Init.Minimal) !void {
             time_of_day = @mod(time_of_day + dt / 240.0, 1);
         }
         if (tour) tour_step_pending = true;
-        landscape.fill(&cells, &terrain, camera.view(&terrain), time_of_day, animation_seconds, show_hud);
+        if (atlas) landscape.fillAtlas(&cells, &terrain, camera.view(&terrain)) else landscape.fill(&cells, &terrain, camera.view(&terrain), time_of_day, animation_seconds, show_hud);
         try renderer.draw(&cells, scene.cols, scene.rows);
         cpu_ns += now(clock.CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         wall_ns += now(clock.CLOCK_MONOTONIC) - frame_start;
@@ -205,7 +215,9 @@ fn run(init: std.process.Init.Minimal) !void {
         log("frames={d} draw_attempts={d} frame_thread_cpu_ms={d:.4} frame_work_wall_ms={d:.4} elapsed_ms={d:.2} key_events={d} pointer_events={d} resizes={d}\n", .{ frames, attempts, @as(f64, @floatFromInt(cpu_ns)) / n / 1e6, @as(f64, @floatFromInt(wall_ns)) / n / 1e6, @as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - started)) / 1e6, window.key_events, window.pointer_events, resize_count });
     }
     if (metrics) {
-        log("view={d:.2},{d:.2},{d:.3},{d:.3},{d:.2} third_person={} time={d:.4}\n", .{ camera.player_x, camera.player_z, camera.yaw, camera.pitch, camera.player_y - @max(terrain_mod.sea_level, terrain.height(camera.player_x, camera.player_z)), camera.third_person, time_of_day });
+        const cache_stats = terrain.cache.stats();
+        log("output={d}x{d} grid={d}x{d} tile_hits={d} tile_misses={d} tile_evictions={d}\n", .{ window.width, window.height, scene.cols, scene.rows, cache_stats.hits, cache_stats.misses, cache_stats.evictions });
+        log("view={d:.2},{d:.2},{d:.3},{d:.3},{d:.2} third_person={} time={d:.4}\n", .{ camera.player_x, camera.player_z, camera.yaw, camera.pitch, camera.player_y - terrain.standingHeight(camera.player_x, camera.player_z), camera.third_person, time_of_day });
         if (gpu_samples > 0) log("frame_gpu_ms={d:.4} gpu_samples={d}\n", .{ @as(f64, @floatFromInt(gpu_ns)) / @as(f64, @floatFromInt(gpu_samples)) / 1e6, gpu_samples }) else log("frame_gpu_ms=unavailable\n", .{});
     }
 }
@@ -238,4 +250,36 @@ fn finiteFloat(text: []const u8) !f32 {
 }
 fn axis(window: *const platform.Platform, positive: usize, negative: usize) f32 {
     return @as(f32, @floatFromInt(@intFromBool(window.keys_down[positive]))) - @as(f32, @floatFromInt(@intFromBool(window.keys_down[negative])));
+}
+
+fn reportWorld(terrain: *terrain_mod.Terrain) !void {
+    var river_nodes: usize = 0;
+    var lake_nodes: usize = 0;
+    var biomes = [_]u32{0} ** @typeInfo(terrain_mod.climate_mod.Biome).@"enum".fields.len;
+    var rain_min: u16 = std.math.maxInt(u16);
+    var rain_max: u16 = 0;
+    var fingerprint: u64 = 0xcbf29ce484222325;
+    for (terrain.samples, 0..) |height, i| {
+        const x = -4096 + @as(f32, @floatFromInt(i % 257)) * 32;
+        const z = -4096 + @as(f32, @floatFromInt(i / 257)) * 32;
+        const water = terrain.water(x, z);
+        if (water.kind == .river) river_nodes += 1;
+        if (water.kind == .lake) lake_nodes += 1;
+        const geo = terrain.geography(x, z, water);
+        biomes[@intFromEnum(geo.biome)] += 1;
+        rain_min = @min(rain_min, geo.rainfall_mm);
+        rain_max = @max(rain_max, geo.rainfall_mm);
+        fingerprint = (fingerprint ^ height) *% 0x100000001b3;
+    }
+    if (river_nodes == 0) return error.NoRivers;
+    const peak = terrain.peak();
+    log("seed={d} generation_seed={d} repaired={} macro_fingerprint={x}\n", .{ terrain.seed, terrain.generation_seed, terrain.repaired, fingerprint });
+    log("region_m=8192x8192 grid={d}x{d} peak_world_y={d:.2} peak_above_sea_m={d:.2}\n", .{ scene.cols, scene.rows, peak, peak - terrain_mod.sea_level });
+    log("river_nodes={d} lake_nodes={d} rainfall_mm={d}..{d}\n", .{ river_nodes, lake_nodes, rain_min, rain_max });
+    log("start={d:.2},{d:.2},{d:.3} settlement_candidate={d:.2},{d:.2} suitability={d}\n", .{ terrain.start.x, terrain.start.z, terrain.start.yaw, terrain.settlement.x, terrain.settlement.z, terrain.settlement.score });
+    inline for (@typeInfo(terrain_mod.climate_mod.Biome).@"enum".fields) |field| {
+        log("biome_{s}={d}\n", .{ field.name, biomes[field.value] });
+    }
+    const st = terrain.cache.stats();
+    log("stream_hits={d} misses={d} evictions={d}\n", .{ st.hits, st.misses, st.evictions });
 }
