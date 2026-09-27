@@ -2,6 +2,9 @@ const std = @import("std");
 const scene = @import("scene.zig");
 const terrain_mod = @import("terrain.zig");
 const camera_mod = @import("camera.zig");
+const Village = @import("village.zig").Village;
+const Sim = @import("village_sim.zig").Sim;
+const village_render = @import("village_render.zig");
 
 const Terrain = terrain_mod.Terrain;
 const View = camera_mod.View;
@@ -53,6 +56,14 @@ pub fn fill(
     animation_seconds: f32,
     show_hud: bool,
 ) void {
+    fillScene(cells, terrain, view, time_of_day, animation_seconds, show_hud, null, null);
+}
+
+pub fn fillVillage(cells: []scene.Cell, terrain: *const Terrain, view: View, time: f32, animation: f32, hud: bool, village: *const Village, sim: *const Sim) void {
+    fillScene(cells, terrain, view, time, animation, hud, village, sim);
+}
+
+fn fillScene(cells: []scene.Cell, terrain: *const Terrain, view: View, time_of_day: f32, animation_seconds: f32, show_hud: bool, village: ?*const Village, sim: ?*const Sim) void {
     std.debug.assert(cells.len == scene.cols * scene.rows);
 
     const time = if (std.math.isFinite(time_of_day)) @mod(time_of_day, 1.0) else 0.36;
@@ -64,10 +75,11 @@ pub fn fill(
     // behind the same terrain that produced the base image.
     var depth_buffer: [scene.cols * scene.rows]f32 = undefined;
     @memset(&depth_buffer, std.math.inf(f32));
-    paintTerrain(cells, &depth_buffer, terrain, view, sky, animation);
-    paintTrees(cells, &depth_buffer, terrain, view, sky, animation);
+    paintTerrain(cells, &depth_buffer, terrain, view, sky, animation, village);
+    paintTrees(cells, &depth_buffer, terrain, view, sky, animation, village);
+    if (village) |v| village_render.paint(cells, &depth_buffer, v, sim.?, view, time);
     if (view.third_person) paintExplorer(cells, &depth_buffer, terrain, view, sky);
-    if (show_hud) paintHud(cells, time);
+    if (show_hud) paintHud(cells, time, sim);
 }
 
 fn makeSky(time: f32, view: View) Sky {
@@ -251,6 +263,7 @@ fn paintTerrain(
     view: View,
     sky: Sky,
     animation: f32,
+    village: ?*const Village,
 ) void {
     const sin_yaw = @sin(view.yaw);
     const cos_yaw = @cos(view.yaw);
@@ -295,7 +308,24 @@ fn paintTerrain(
                             @as(i32, @intFromFloat(@floor(world_z * 0.43))) - @as(i32, @intCast(y * 5)),
                         );
                         const edge = row == projected_row;
-                        const cell = surfaceCell(surface, detail, edge, column, y, depth, sky, animation);
+                        var cell = surfaceCell(surface, detail, edge, column, y, depth, sky, animation);
+                        if (!is_water) if (village) |v| {
+                            const light = 0.14 + sky.daylight * 0.86;
+                            switch (v.surfaceAt(world_x, world_z)) {
+                                .path => {
+                                    cell.background = shadeTreeColor(scene.rgb(139, 113, 76), sky, 0.85 * light);
+                                    cell.foreground = shadeTreeColor(scene.rgb(180, 149, 104), sky, 0.9 * light);
+                                    cell.glyph = if (detail % 4 == 0) ':' else '.';
+                                },
+                                .field => {
+                                    const row_crop = @mod(@floor(world_x * 0.7), 3) == 0;
+                                    cell.background = shadeTreeColor(scene.rgb(84, 70, 38), sky, 0.9 * light);
+                                    cell.foreground = shadeTreeColor(scene.rgb(158, 153, 65), sky, light);
+                                    cell.glyph = if (row_crop) '"' else ',';
+                                },
+                                .none => {},
+                            }
+                        };
                         cells[index] = cell;
                         depth_buffer[index] = depth;
                     }
@@ -486,7 +516,7 @@ fn waterNormal(x: f32, z: f32, animation: f32) [3]f32 {
     return .{ -slope_x / magnitude, 1.0 / magnitude, -slope_z / magnitude };
 }
 
-fn paintTrees(cells: []scene.Cell, depth_buffer: []f32, terrain: *const Terrain, view: View, sky: Sky, animation: f32) void {
+fn paintTrees(cells: []scene.Cell, depth_buffer: []f32, terrain: *const Terrain, view: View, sky: Sky, animation: f32, village: ?*const Village) void {
     const search_radius = tree_view_depth * 1.55;
     const min_x: i32 = @intFromFloat(@floor((view.x - search_radius) / tree_grid));
     const max_x: i32 = @intFromFloat(@ceil((view.x + search_radius) / tree_grid));
@@ -510,6 +540,9 @@ fn paintTrees(cells: []scene.Cell, depth_buffer: []f32, terrain: *const Terrain,
             const lateral = rel_x * cos_yaw - rel_z * sin_yaw;
             if (@abs(lateral) > @max(0.0, forward) * 1.16 + 28.0) continue;
             if (terrain.tree(gx, gz)) |tree| {
+                if (village) |v| {
+                    if (v.cleared(tree.x, tree.z) or v.blocked(tree.x, tree.z, tree.radius * 0.8)) continue;
+                }
                 drawTree(cells, depth_buffer, view, sky, tree, animation);
             }
         }
@@ -688,11 +721,11 @@ fn paintExplorer(cells: []scene.Cell, depth_buffer: []f32, terrain: *const Terra
     }
 }
 
-fn paintHud(cells: []scene.Cell, time: f32) void {
+fn paintHud(cells: []scene.Cell, time: f32, sim: ?*const Sim) void {
     const top_width: usize = @min(scene.cols - 4, 43);
     panel(cells, 2, 2, top_width, 5, scene.rgb(10, 21, 27), 0.78);
     scene.label(cells, 4, 3, "A LIFE", scene.rgb(244, 226, 190));
-    scene.label(cells, 4, 5, "RIVERS AND RANGES / MILESTONE 02", scene.rgb(177, 202, 205));
+    scene.label(cells, 4, 5, "A STRANGER / AGE 15", scene.rgb(177, 202, 205));
 
     const bottom_y = scene.rows - 4;
     const bottom_height: usize = 3;
@@ -701,9 +734,15 @@ fn paintHud(cells: []scene.Cell, time: f32) void {
     scene.label(cells, 4, bottom_y + 1, "SPACE TIME  F11 FULLSCREEN  ESC CLOSE", scene.rgb(155, 179, 181));
 
     const clock_x = scene.cols - 23;
-    panel(cells, clock_x - 2, 2, 21, 3, scene.rgb(10, 21, 27), 0.78);
+    panel(cells, clock_x - 2, 2, 21, 4, scene.rgb(10, 21, 27), 0.78);
     const phase = if (@sin((time - 0.25) * tau) < -0.10) "NIGHT AIR" else if (time < 0.50) "MORNING" else "EVENING";
     scene.label(cells, clock_x, 3, phase, scene.rgb(231, 205, 166));
+    if (sim) |village_sim| {
+        var text: [40]u8 = undefined;
+        const minute: u32 = @intFromFloat(time * 1440);
+        const label = std.fmt.bufPrint(&text, "DAY {d}  {d:0>2}:{d:0>2}", .{ village_sim.day() + 1, minute / 60, minute % 60 }) catch "";
+        scene.label(cells, clock_x, 4, label, scene.rgb(177, 202, 205));
+    }
 }
 
 fn panel(cells: []scene.Cell, x: usize, y: usize, width: usize, height: usize, color: u32, opacity: f32) void {

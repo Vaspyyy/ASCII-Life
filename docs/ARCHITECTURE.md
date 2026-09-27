@@ -584,3 +584,7 @@ Trees have stable signed 24-metre grid identities with separate tagged sub-seeds
 The M1 full fine-height cache is superseded by a 257 × 257 regional skeleton, derived climate/drainage fields, and a bounded 64-tile local-detail cache. `hydrology.zig` owns drainage graph construction, accumulation and water sampling; `climate.zig` owns annual climate, biome classification and resource potentials; `streaming.zig` owns disposable 512 m height tiles. `terrain.zig` integrates those causes, carves channel banks, chooses an initial riverbank and scores a future settlement candidate. It retains one precomputed ridge frame per 8 m row to avoid repeating row-wide generation during tile fills.
 
 Only distant rendering blends to the regional lattice. Tree positions and physical standing heights use stable fine generation. The developer atlas and headless world report inspect the generated world without introducing a revealed player journal. See [WORLDGEN.md](WORLDGEN.md) for the invariants, validation commands and limits.
+
+## Milestone 3 village
+
+Physical settlement generation, resident simulation and architecture rendering are separate modules: `village.zig`, `village_sim.zig`, and `village_render.zig`. Landscape rendering supplies paths, cultivated ground and clearing. Projected structure surfaces share its depth buffer. The world clock drives resident schedules and economy; draw frequency does not determine production. Headless advancement exercises the same simulation as native play. See [VILLAGE.md](VILLAGE.md) for current behavior and scope.

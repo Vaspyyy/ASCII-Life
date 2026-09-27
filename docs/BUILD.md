@@ -1,6 +1,6 @@
 # Building and exploring ASCII-Life
 
-Milestone 2 adds connected drainage, climate, biomes, resource potential and deterministic local-detail streaming to the explorable regional landscape. It uses a custom native glyph renderer, with no game engine or external visual assets. NPCs, world history, combat, and persistent gameplay are later milestones.
+Milestone 3 adds a generated rural village, residents with homes and work, daily schedules and an unattended economy to the regional landscape. It uses the native glyph renderer without an engine or external assets. Conversation, world history, combat and save files remain later work.
 
 ## Development environment
 
@@ -34,13 +34,13 @@ The default xdg-shell XML location is `/usr/share/wayland-protocols/stable/xdg-s
 - **Q/E:** lower/raise the development camera above the terrain. This is a landscape inspection control, not a flight skill or game mechanic.
 - **C:** switch first/third person, retaining the same player position and world.
 - **R:** return to the starting viewpoint.
-- **T:** advance the sun by one eighth of a day; **Space:** pause/resume sun and water animation.
+- **T:** advance the simulation by three hours for development inspection; **Space:** pause/resume simulation and animation.
 - **H:** hide/show the compact control labels.
 - **F11:** toggle fullscreen (also exercises compositor resize and swapchain recreation).
 - **Escape:** close cleanly.
 - Keyboard press/release and pointer events are counted in `--metrics` output.
 - `--capture PATH` saves the first actual Vulkan frame as an RGB PPM and exits; the image copy is allocated only on request. This provides visual QA without a desktop screenshot portal.
-- `--static` freezes the visual clock for repeatable inspection; camera movement remains available.
+- `--static` freezes the simulation and visual clock for repeatable inspection; camera movement remains available.
 - `--frames N` exits cleanly after N presentations; combine with `--metrics` for a bounded measurement.
 - `--seed N` selects a reproducible region (decimal or `0x` hexadecimal, default `0xa11fe`).
 - `--time F` selects a day fraction in `[0,1)`; `.25` is sunrise, `.5` noon, `.75` sunset. Default `.36`.
@@ -95,3 +95,7 @@ python3 scripts/verify_m2.py
 ```
 
 The development atlas exposes generation data for QA. It is not the player's journal or a revealed gameplay map. See [WORLDGEN.md](WORLDGEN.md) for the algorithms, streaming boundary and current limits.
+
+## Village inspection
+
+See [VILLAGE.md](VILLAGE.md) for the simulation boundary. `--village-report` reports the generated layout and residents without a display. `--simulate-days 28` tests unattended advancement. `--village-overview` selects an elevated QA viewpoint. `python3 scripts/verify_m3.py` checks village reports and native 1440p captures.

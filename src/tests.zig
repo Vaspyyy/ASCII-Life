@@ -4,6 +4,9 @@ test {
     _ = @import("hydrology.zig");
     _ = @import("climate.zig");
     _ = @import("streaming.zig");
+    _ = @import("village.zig");
+    _ = @import("village_sim.zig");
+    _ = @import("village_render.zig");
     _ = @import("camera.zig");
     _ = @import("landscape.zig");
 }

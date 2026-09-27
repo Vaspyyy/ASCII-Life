@@ -1,6 +1,7 @@
 const std = @import("std");
 const terrain_mod = @import("terrain.zig");
 const Terrain = terrain_mod.Terrain;
+const Village = @import("village.zig").Village;
 
 const eye_height: f32 = 2.5;
 const walk_speed: f32 = 12.0;
@@ -91,6 +92,52 @@ pub const Camera = struct {
 
         elevation = @max(0, elevation + vertical * distance);
         self.player_y = groundHeight(terrain, self.player_x, self.player_z) + elevation;
+    }
+
+    /// Resolve a swept horizontal move against generated building footprints.
+    /// Development elevation remains available above roofs.
+    pub fn updateInVillage(self: *Camera, terrain: *const Terrain, village: *const Village, input: Input, dt: f32) void {
+        const old = self.*;
+        self.update(terrain, input, dt);
+        const dx = self.player_x - old.player_x;
+        const dz = self.player_z - old.player_z;
+        const steps: usize = @max(1, @as(usize, @intFromFloat(@ceil(@max(@abs(dx), @abs(dz)) / 0.25))));
+        const sx = dx / @as(f32, @floatFromInt(steps));
+        const sz = dz / @as(f32, @floatFromInt(steps));
+        const lift = @max(0, self.player_y - terrain.standingHeight(self.player_x, self.player_z));
+        var x = old.player_x;
+        var z = old.player_z;
+        for (0..steps) |_| {
+            const feet = terrain.standingHeight(x, z) + lift;
+            if (!buildingObstructs(village, x + sx, feet, z, 0.45)) x += sx;
+            if (!buildingObstructs(village, x, feet, z + sz, 0.45)) z += sz;
+        }
+        self.player_x = x;
+        self.player_z = z;
+        self.player_y = terrain.standingHeight(x, z) + lift;
+    }
+
+    pub fn villageView(self: *const Camera, terrain: *const Terrain, village: *const Village) View {
+        var result = self.view(terrain);
+        if (!self.third_person) return result;
+        const focus_y = self.player_y + third_person_focus_height;
+        const dx = result.x - self.player_x;
+        const dy = result.y - focus_y;
+        const dz = result.z - self.player_z;
+        var safe: f32 = 0.05;
+        var step: usize = 1;
+        while (step <= 40) : (step += 1) {
+            const t = @as(f32, @floatFromInt(step)) / 40;
+            if (buildingObstructs(village, self.player_x + dx * t, focus_y + dy * t, self.player_z + dz * t, 0.25)) break;
+            safe = t;
+        }
+        if (safe < 1) {
+            result.x = self.player_x + dx * safe;
+            result.z = self.player_z + dz * safe;
+            result.y = focus_y + dy * safe;
+            result.pitch = std.math.atan((focus_y - result.y) / @max(0.01, @sqrt(dx * dx + dz * dz) * safe));
+        }
+        return result;
     }
 
     /// Place the camera at an explicit terrain-relative pose for repeatable
@@ -186,6 +233,21 @@ pub const Camera = struct {
         );
     }
 };
+
+fn buildingObstructs(village: *const Village, x: f32, y: f32, z: f32, radius: f32) bool {
+    for (village.buildingsSlice()) |b| {
+        const top = b.y + switch (b.kind) {
+            .farm => 0,
+            .home => b.height,
+            .granary => b.height + @min(0.7, b.height * 0.16),
+            .workshop => b.height * (0.64 + 0.36 * 0.38) + @max(1, b.height * 0.34),
+            .well => @max(0.78, b.height * 0.55) + 1.48,
+        };
+        if (b.kind == .farm or y > top + 0.25) continue;
+        if (@abs(x - b.x) < b.width * 0.5 + radius and @abs(z - b.z) < b.depth * 0.5 + radius) return true;
+    }
+    return false;
+}
 
 fn thirdPersonView(self: *const Camera, x: f32, y: f32, z: f32, forward_distance: f32) View {
     const focus_y = self.player_y + third_person_focus_height;
@@ -340,4 +402,24 @@ test "third person frames a grounded explorer at default and pitch limits" {
         try std.testing.expect(head_row >= 0);
         try std.testing.expect(feet_row < rows);
     }
+}
+
+test "village walls stop swept ground movement while inspection can pass above roofs" {
+    var terrain = try Terrain.init(std.testing.allocator, terrain_mod.default_seed);
+    defer terrain.deinit();
+    const village = try Village.init(&terrain);
+    var home = village.buildingsSlice()[0];
+    for (village.buildingsSlice()) |b| {
+        if (b.kind == .home) {
+            home = b;
+            break;
+        }
+    }
+    var camera = Camera.init(&terrain);
+    camera.setPose(&terrain, home.x + home.width * 0.5 + 1, home.z, 0, 0, 0);
+    for (0..12) |_| camera.updateInVillage(&terrain, &village, .{ .strafe = -1, .fast = true }, 0.1);
+    try std.testing.expect(camera.player_x >= home.x + home.width * 0.5 + 0.44);
+    camera.setPose(&terrain, home.x + home.width * 0.5 + 1, home.z, 0, 0, 40);
+    camera.updateInVillage(&terrain, &village, .{ .strafe = -1, .fast = true }, 0.1);
+    try std.testing.expect(camera.player_x < home.x + home.width * 0.5);
 }

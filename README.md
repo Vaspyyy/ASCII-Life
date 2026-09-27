@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 2 connects the native landscape to drainage, climate, biomes, resource potential, and regenerable local detail. The life simulation is a later milestone.
+Milestone 3 adds the initial rural village and its daily life to the generated geography. Households, jobs and production advance on a shared simulation clock.
 
 See:
 
@@ -209,13 +209,13 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 2 regional geography.**
+**Pre-alpha / Milestone 3 starting village.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
 
-Explore a seeded riverbank landscape with connected tributaries and lakes, climate-dependent vegetation, and first/third-person cameras. Local terrain tiles regenerate identically after eviction. The landscape is generated at runtime; no external visual assets are shipped.
+Arrive on a path outside a generated rural village. Homes, cultivated plots and workplaces follow the terrain; residents have households, jobs and daily routines. Explore in first or third person while production and consumption continue. Geography and architecture are generated at runtime; no external visual assets are shipped.
 
 Generation and inspection tools: [docs/WORLDGEN.md](docs/WORLDGEN.md).
 
-World simulation and RPG systems have not been implemented. Milestone 3 will turn a suitable site into the starting village.
+Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation, social memory, combat and save files remain future work.

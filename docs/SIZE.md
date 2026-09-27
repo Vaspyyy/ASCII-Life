@@ -296,3 +296,47 @@ The bounded fine-height cache uses 540,800 sample bytes across 64 slots. A 264,1
 Validation: Debug and ReleaseSmall suites passed, including drainage adjacency, downstream ordering/levels, water conservation, basin filling, climate response, seam agreement, and regeneration after eviction. The eviction test checks a real generated tree's identity. `scripts/verify_m2.py` passed six seeds, repeat reports, and 1440p Vulkan captures for atlas, repeated default, alternate seed, night and third person. Repeated default pixels are byte-identical; captures were validation-layer clean. Day, night, atlas and third-person readbacks were inspected. Logs and images remain under ignored `artifacts/`.
 
 This is regional geography, not planetary generation or life simulation. Channels still reveal the coarse drainage lattice in some views; water and erosion are procedural approximations rather than fluid simulation. The settlement candidate is a suitability result, not an inhabited village. See `WORLDGEN.md` for generation rules and limits.
+
+## Milestone 3 village — 2026-09-28
+
+Measured the M3 working tree based on `ec74e5b34bad9d0146e362dc39e99a961138a3a1`, Zig 0.16.0 ReleaseSmall, KDE Wayland / RTX 3070. Build/source/shader digest using the M0 procedure: `40d4034c4c1faf9be02def4159088719bc1b08836c9bb175a2e273815193492d`. ELF SHA-256: `d940955e2d9b86be5a7aef0ad50ea4a5202eaf7a5f0fdc7ecf5b605cd7d41dad`.
+
+| Distribution | Exact bytes | Change from M2 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 202,328 | +51,824 |
+| ELF compressed with `xz -9` | 97,604 | +23,988 |
+| Runtime bundle payload | 3,694,573 | +51,824 |
+| Runtime bundle `.tar.xz` | 1,296,580 | +24,204 |
+
+No dependencies or external visual assets were added. The bundle retains the documented kernel/compositor/GPU-driver boundary and same-host compatibility limit. Its executable hash matches the measured binary, and it completed a 120-frame native run from `/tmp` at 1440p.
+
+### 1440p runtime
+
+Both runs presented 600 frames at **2560 × 1440**, default seed **659966 (`0xa11fe`)**, with 599 GPU samples and no validation layer. Stationary uses `--static`; the tour advances simulation and moves from the village approach, switching to third person halfway through. Unlike the old visual-only tour clock, 600 tour frames now advance 600 simulated seconds.
+
+| Metric | Stationary | Moving tour |
+| --- | ---: | ---: |
+| Terrain generation | 34.837 ms | 37.501 ms |
+| Village generation and initial simulation | 24.710 ms | 24.805 ms |
+| Main entry → first successful present | 207.789 ms | 221.370 ms |
+| Main-thread CPU/frame | 9.8985 ms | 9.4034 ms |
+| Frame work wall time | 10.0449 ms | 9.5208 ms |
+| GPU command interval | 0.1080 ms | 0.1068 ms |
+| CPU-equivalent FPS (`1000 / CPU ms`) | 101.03 | 106.34 |
+| Steady RSS | 85,932–85,992 KiB | 85,880–85,944 KiB |
+| NVIDIA process graphics memory | 55 MiB | 55 MiB |
+| Tile cache misses / evictions, including generation | 76 / 12 | 92 / 28 |
+
+The logical render grid remains **240 × 135 (32,400 cells)**. The region remains **8,192 × 8,192 m (67.108864 km²)**. A fresh complete height scan again found peak world Y **1,040.75 m**, or **960.75 m above the Y=80 m sea datum**.
+
+The application still caps work at 60 Hz. CPU-equivalent FPS is arithmetic main-thread capacity, not measured uncapped presentation throughput. Startup excludes physical scanout. These are new village views, not controlled identical-scene comparisons with M2. Generation measures the geography separately from the village plan and initial clock advancement; steady frame cost includes glyph construction, architecture, residents and simulation when running.
+
+### Validation and scope
+
+- Final Debug and ReleaseSmall unit suites passed. Coverage includes village site/entry/path invariants, building collision, projection/clipping/depth behavior, resident assignment, stock conservation, and exact 28-day state equivalence between large and irregular time advances.
+- Redirecting farm labour to craft work produces food shortages. The ordinary village covers food and water demand for 28 unattended days across seeds 0, 1, 42, 659966, 72019 and maximum u64.
+- `scripts/verify_m3.py` passed headless reports and native 1440p Vulkan validation captures: repeated arrival, overview, morning commute, evening, night, third person and alternate seed. Repeat arrival captures are byte-identical.
+- Native W/C/T/F11/Escape input was observed; movement, camera mode, simulation clock stepping, fullscreen geometry and clean exit worked without Vulkan validation messages. Fullscreen changed surface placement on this already-1440p window, not pixel extent; it is not an additional resize-extent test.
+- Inspected GPU readbacks include arrival, village overview, night and a close street with commuting residents. Logs/captures are ignored local artifacts under `artifacts/m3-*`.
+
+The default village has **21 residents, six households, six homes, two fields, a workshop, granary and well**, connected by 31 path segments. This milestone uses a common street arrangement fitted to viable terrain. It has abstract provisioning and session-resident state, but no building interiors, conversation, generational events or save files. Distant paths can alias at the current glyph resolution. See [VILLAGE.md](VILLAGE.md) for the precise simulation and generation limits.
