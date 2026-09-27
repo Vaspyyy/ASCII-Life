@@ -559,3 +559,11 @@ Instead establish baselines, profile, and track regressions.
 The renderer should be extremely cheap relative to conventional high-resolution 3D because logical world shading can operate at glyph-cell scale.
 
 Use that saved budget on atmosphere, world scale, and simulation rather than wasting it.
+
+## Milestone 0 implementation boundary
+
+The first foundation uses four small Zig modules rather than creating the entire conceptual tree above. Wayland and Vulkan are confined to `platform.zig` and `renderer.zig`. `scene.zig` generates a fixed test composition from integer coordinates and an explicit animation tick; it has no native-platform imports. This is a renderer test image, not the future terrain generator.
+
+A cell uses 16 bytes in the initial CPU/GPU interface: glyph index, packed foreground RGB, packed background RGB, and reserved padding matching the shader storage-buffer layout. The glyph table is 128 entries of two 32-bit words (1,024 bytes); only the original demonstration characters have nonzero patterns. Resolution, table size, shader sizes, and resulting ELF cost are measured before attempting tighter packing.
+
+The platform calls ordinary system libraries directly. `libwayland-client` supplies protocol transport and proxy management, and the Vulkan loader connects to the host GPU driver. Reimplementing either would add substantial protocol/driver-discovery and synchronization obligations without evidence of a useful size saving. These choices are isolated behind the two native modules and do not affect deterministic cell generation. The initial size ledger records their runtime/distribution boundary rather than treating dynamic linking as a self-contained build.

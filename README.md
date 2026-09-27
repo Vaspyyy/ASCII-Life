@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-This repository is intentionally starting from zero. The first job is to prove the technical foundation before building the life simulation.
+Milestone 0 now provides the native glyph-rendering foundation. The life simulation and explorable landscape are later milestones.
 
 See:
 
@@ -209,8 +209,11 @@ See:
 
 ## Status
 
-**Pre-alpha / foundation stage.**
+**Pre-alpha / Milestone 0 foundation.**
 
-The immediate goal is not "implement the whole RPG."
+Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
+Size and performance records: [docs/SIZE.md](docs/SIZE.md).
 
-The immediate goal is to make a tiny native Linux executable render a deterministic, beautiful, explorable colored-ASCII fantasy landscape and establish hard measurements for size and performance.
+Milestone 0 renders a deterministic colored-glyph study, handles native input and resizing, and records executable size and runtime costs.
+
+The next milestone is an explorable procedural fantasy landscape. World simulation and RPG systems have not been implemented.
