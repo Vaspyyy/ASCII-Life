@@ -598,3 +598,28 @@ Wayland keyboard layout translation uses libxkbcommon inside `platform.zig`; the
 ## Milestone 5 causal needs
 
 `ecology.zig` connects seeded livestock ownership, fence condition and predator hunger to hourly raids, real provisioning/losses, household responses and player protection. The economy retains explicit conservation counters for livestock and repairs. Social livestock observations carry snapshots and provenance; dialogue and public notices disclose those observations rather than querying world truth. The shared clock calls ecology before social propagation at absolute hour boundaries. Glyph geometry depicts the resulting pen, animals and predator presence. See [PROBLEMS.md](PROBLEMS.md).
+
+## Milestone 6 ordinary life and persistence
+
+`life.zig` owns player meals, money, paid agricultural labor, housing, needs,
+practice and aging. `world_clock.advanceLife` visits shared hour boundaries
+and physical work completions; village output, livestock consequences, player
+domestic state and social observation run in that order. An established routine
+abstracts the player's commute while retaining the employer's schedule and
+actual provisioning/accounting. Unsafe or lost anchors interrupt longer stays.
+`life_ui.zig` displays player-owned state; dialogue actions disclose agreements
+and directions without revealing private world state. The calendar drives
+seasonal farm output and generated crop/deciduous-tree glyphs.
+
+`persistence.zig` is platform-independent, versioned explicit serialization.
+It rebuilds untouched terrain/architecture/identities from the seed, retains
+evolved state and route origins, regenerates route paths, then validates
+independent temporary records before replacing live state. Learned journal
+entries persist; conversation widgets do not. Native file operations and
+atomic replacement are isolated in `save_file.zig`; QA does not implicitly
+load or overwrite the user's ordinary save. See [LIFE.md](LIFE.md).
+
+Native verification and benchmarks use an isolated KWin virtual display and
+private session bus through `scripts/background.py`. This is development
+infrastructure outside the game dependency boundary. It never opens a desktop
+window or falls back to the user's display.

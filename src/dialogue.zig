@@ -3,6 +3,8 @@ const scene = @import("scene.zig");
 const people = @import("people.zig");
 const sim_mod = @import("village_sim.zig");
 const ecology_mod = @import("ecology.zig");
+const life_mod = @import("life.zig");
+const village_mod = @import("village.zig");
 
 pub const input_capacity = 96;
 pub const reply_capacity = 192;
@@ -26,6 +28,9 @@ pub const Intent = enum(u8) {
     goodbye,
     offer_help,
     unknown,
+    ask_employment,
+    buy_food,
+    rent_home,
 };
 
 /// Parse the small, explicit set of conversational phrases understood by the
@@ -34,6 +39,9 @@ pub fn parseIntent(input: []const u8) Intent {
     const phrase = normalized(input) orelse return .unknown;
     if (oneOf(phrase, &.{ "hello", "hi", "hey", "greetings", "good morning", "good evening" })) return .greeting;
     if (oneOf(phrase, &.{ "name", "what is your name", "what's your name", "who are you", "what do people call you" })) return .ask_name;
+    if (oneOf(phrase, &.{ "hire me", "paid work", "i need paid work", "can you hire me", "can i work for you", "i want a job" })) return .ask_employment;
+    if (oneOf(phrase, &.{ "buy food", "i want to buy food", "can i buy food", "buy provisions" })) return .buy_food;
+    if (oneOf(phrase, &.{ "home", "rent a room", "rent room", "can i rent a room", "i need a home", "i need a room" })) return .rent_home;
     if (oneOf(phrase, &.{ "work", "job", "what do you do", "what is your job", "what's your job", "what is your work", "what's your work", "where do you work", "what is your profession" })) return .ask_work;
     if (oneOf(phrase, &.{ "family", "tell me about your family", "do you have family", "who is in your family", "how is your family" })) return .ask_family;
     if (oneOf(phrase, &.{ "news", "what's new", "what is new", "any news", "what happened", "what have you heard", "heard anything", "what's happening", "what is happening" })) return .ask_news;
@@ -241,16 +249,25 @@ pub const Dialogue = struct {
         self.submitTextWithEcology(self.input[0..self.input_len], social, sim, ecology);
     }
 
+    pub fn submitWithLife(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, ecology: *ecology_mod.Ecology, life: *life_mod.Life, village: *const village_mod.Village) void {
+        if (!self.active or self.journal_open) return;
+        self.submitTextWithLife(self.input[0..self.input_len], social, sim, ecology, life, village);
+    }
+
     /// QA and scripted callers can submit the same text path as keyboard input.
     pub fn submitText(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim) void {
-        self.submitCommon(line, social, sim, null);
+        self.submitCommon(line, social, sim, null, null, null);
     }
 
     pub fn submitTextWithEcology(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: *ecology_mod.Ecology) void {
-        self.submitCommon(line, social, sim, ecology);
+        self.submitCommon(line, social, sim, ecology, null, null);
     }
 
-    fn submitCommon(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology) void {
+    pub fn submitTextWithLife(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: *ecology_mod.Ecology, life: *life_mod.Life, village: *const village_mod.Village) void {
+        self.submitCommon(line, social, sim, ecology, life, village);
+    }
+
+    fn submitCommon(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology, life: ?*life_mod.Life, village: ?*const village_mod.Village) void {
         if (!self.active or self.journal_open) return;
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) return;
@@ -261,13 +278,13 @@ pub const Dialogue = struct {
             const topic = if (asciiStartsWithIgnoreCase(trimmed, "ask about ") or asciiStartsWithIgnoreCase(trimmed, "tell me about ")) topicText(trimmed, "ask about ", "tell me about ") else trimEdgeMarks(trimmed);
             self.ask_topic_len = @intCast(copyLowerBounded(&self.ask_topic, topic));
         }
-        self.respond(social, sim, ecology);
+        self.respond(social, sim, ecology, life, village);
         self.rememberTurn(trimmed);
         self.input_len = 0;
         self.input[0] = 0;
     }
 
-    fn respond(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology) void {
+    fn respond(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology, life: ?*life_mod.Life, village: ?*const village_mod.Village) void {
         const id: u8 = @intCast(self.speaker_id);
         const person_value = social.person(id) orelse {
             self.setReply("I don't understand. Try hello, name, work, family, news, plans, help, ask about supplies, or goodbye.");
@@ -278,6 +295,8 @@ pub const Dialogue = struct {
                 const trust = social.trust(id);
                 if (trust < 0) {
                     self.setReply("Hello. After what you said, I need time to trust you.");
+                } else if (trust >= 16 and person_value.player.meaningful_actions >= 2) {
+                    self.setReply("Hello, my friend. It's good to see you again.");
                 } else if (trust > 0) {
                     self.setReply("Hello again. It's good to see you.");
                 } else {
@@ -295,6 +314,7 @@ pub const Dialogue = struct {
                 self.setReplyFmt("I work as {s}.", .{occupation});
                 self.recordReply(social, sim, .direct_disclosure, 0);
             },
+            .ask_employment, .buy_food, .rent_home => self.answerLife(social, sim, life, village),
             .ask_family => self.answerFamily(social, sim, person_value),
             .ask_news => self.answerNews(social, sim, id),
             .ask_goals => self.answerGoal(social, sim, person_value),
@@ -321,7 +341,74 @@ pub const Dialogue = struct {
                 self.setReplyFmt("I work as {s}. You can ask how work is going.", .{jobName(person_value.job)});
                 self.recordReply(social, sim, .direct_disclosure, 0);
             },
-            .unknown => self.setReply("I didn't follow that. Try hello; name, work, family, news, or plans; ask about supplies, harvest, or work; help; thanks; sorry; or goodbye."),
+            .unknown => self.setReply("Try hello; name, work, family, news, plans; hire me; buy food; rent a room; ask about supplies or sheep; help; thanks; sorry; or goodbye."),
+        }
+    }
+
+    fn answerLife(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, life: ?*life_mod.Life, village: ?*const village_mod.Village) void {
+        const state = life orelse {
+            self.setReply("I can tell you about my work. Try 'work'.");
+            return;
+        };
+        const place = village orelse return;
+        const id: u8 = @intCast(self.speaker_id);
+        if (self.speaker_id >= sim.resident_count) return;
+        const resident = sim.residents[self.speaker_id];
+        switch (self.last_intent) {
+            .ask_employment => {
+                if (resident.job != .farmer or !resident.employed) {
+                    self.setReply("I cannot offer paid field work. Ask a working farmer 'hire me'.");
+                    self.recordReply(social, sim, .direct_disclosure, 0);
+                } else if (state.employer_id != null and state.employer_id.? != id) {
+                    self.setReply("You already have a farmer to work with. Keep that arrangement for now.");
+                } else if (!state.hire(id, sim, social)) {
+                    self.setReply("After how you treated me, I cannot offer you work yet.");
+                } else {
+                    self.learnName(id, resident.nameSlice());
+                    const field = place.buildingsSlice()[resident.workplace];
+                    self.setReplyFmt("I'm {s}. My field is {s} of the well: hold G at its entrance in working hours. Pay: 2 coins/hour, up to six hours/day, plus a quarter ration if stores allow.", .{ resident.nameSlice(), placeDirection(place, field.x, field.z) });
+                    self.recordReply(social, sim, .direct_disclosure, 0);
+                }
+            },
+            .buy_food => {
+                if (resident.job != .keeper or !resident.employed) {
+                    self.setReply("I do not sell provisions. Ask the keeper of the village stores 'buy food'.");
+                } else if (state.buyFood(id, sim, social)) {
+                    self.setReply("Here are two daily rations for 3 coins. Keep some coins for your room. Your food is eaten as you live and work.");
+                } else if (social.trust(id) < -20) {
+                    self.setReply("After how you treated me, I will not trade with you yet.");
+                } else if (state.coins < 3) {
+                    self.setReply("Two daily rations cost 3 coins. You do not have enough coins yet.");
+                } else {
+                    self.setReply("I cannot spare two rations from the village stores today.");
+                }
+                self.recordReply(social, sim, .direct_disclosure, 0);
+            },
+            .rent_home => {
+                if (state.home_household) |home| {
+                    if (home == resident.household) {
+                        const door = place.doorPoint(sim.households[home].home_building);
+                        self.setReplyFmt("Your room is with us, {s} of the well. Upkeep is 1 coin a day after the first week. Near our door you can sleep or live your routine; K shows your life.", .{placeDirection(place, door.x, door.z)});
+                        self.recordReply(social, sim, .direct_disclosure, 0);
+                    } else self.setReply("You already have a room with another household.");
+                } else if (resident.job == .child) {
+                    self.setReply("Ask an adult in the household about a room.");
+                } else if (state.rentHome(id, sim, social)) {
+                    self.learnName(id, resident.nameSlice());
+                    const door = place.doorPoint(resident.home_building);
+                    self.setReplyFmt("I'm {s}. Your room is {s} of the well. The 7 coins cover the first week, then 1 coin/day. Come to our door to sleep or live your work routine. K shows your life.", .{ resident.nameSlice(), placeDirection(place, door.x, door.z) });
+                    self.recordReply(social, sim, .direct_disclosure, 0);
+                } else if (social.trust(id) < 0) {
+                    self.setReply("I cannot invite you into our home after how you treated me. Trust will need time and real help to mend.");
+                } else if (state.coins < 7) {
+                    self.setReply("A room costs 7 coins for the first week, then 1 coin a day. Save enough for the first payment.");
+                    self.recordReply(social, sim, .direct_disclosure, 0);
+                } else {
+                    self.setReply("A room costs 7 coins, then 1 a day. First work four paid hours for our household, or let us get to know you through real help.");
+                    self.recordReply(social, sim, .direct_disclosure, 0);
+                }
+            },
+            else => unreachable,
         }
     }
 
@@ -481,6 +568,11 @@ pub const Dialogue = struct {
         return self.currentSpeakerName();
     }
 
+    pub fn knownName(self: *const Dialogue, person_id: usize) ?[]const u8 {
+        for (0..self.known_count) |i| if (self.known_ids[i] == person_id and self.known_name_lens[i] != 0) return self.known_names[i][0..self.known_name_lens[i]];
+        return null;
+    }
+
     /// Add a fact only after Social explicitly disclosed it to the player.
     pub fn recordLearned(self: *Dialogue, source_id: usize, source_name: []const u8, fact: []const u8, day: u32) void {
         self.recordLearnedWithProvenance(source_id, source_name, fact, day, .direct_disclosure, 0);
@@ -550,7 +642,7 @@ pub const Dialogue = struct {
         const who = self.currentSpeakerName();
         const head = std.fmt.bufPrint(&title, "Conversation with {s}", .{who}) catch "Conversation";
         drawText(cells, bounds.x + 2, bounds.y + 1, bounds.width - 4, head, color_heading);
-        drawText(cells, bounds.x + 2, bounds.y + 2, bounds.width - 4, "Try hello | name | work | family | news | plans | ask about [topic] | help | thanks | bye", color_hint);
+        drawText(cells, bounds.x + 2, bounds.y + 2, bounds.width - 4, "name | work | hire me | buy food | rent a room | family | news | plans | help | bye", color_hint);
         const prompt_y = bounds.y + bounds.height - 2;
         drawHLine(cells, bounds.x + 1, prompt_y - 1, bounds.width - 2, color_border);
         self.paintHistory(cells, bounds.x + 2, bounds.y + 3, bounds.width - 4, prompt_y - 1 - (bounds.y + 3));
@@ -586,7 +678,7 @@ pub const Dialogue = struct {
             const source = if (entry.source_name_len == 0) "A villager" else entry.source_name[0..entry.source_name_len];
             const attribution = switch (entry.provenance) {
                 .direct_disclosure => " told you: ",
-                .witnessed => " told you from direct observation: ",
+                .witnessed => if (entry.source_id == people.player_id) " observed: " else " told you from direct observation: ",
                 .told => if (entry.underlying_source_name_len != 0) " told you they heard from " else " passed on what they heard: ",
                 .inferred => " suspects: ",
                 .notice => " disclosed a posted notice: ",
@@ -792,6 +884,20 @@ fn penDirection(ecology: *const ecology_mod.Ecology) []const u8 {
     return if (dx >= 0) "northeast" else "northwest";
 }
 
+fn placeDirection(village: *const village_mod.Village, x: f32, z: f32) []const u8 {
+    var well = village.center;
+    for (village.buildingsSlice()) |building| if (building.kind == .well) {
+        well = .{ .x = building.x, .z = building.z };
+        break;
+    };
+    const dx = x - well.x;
+    const dz = z - well.z;
+    if (@abs(dx) > @abs(dz) * 2) return if (dx >= 0) "east" else "west";
+    if (@abs(dz) > @abs(dx) * 2) return if (dz >= 0) "south" else "north";
+    if (dz >= 0) return if (dx >= 0) "southeast" else "southwest";
+    return if (dx >= 0) "northeast" else "northwest";
+}
+
 fn jobName(job: sim_mod.Job) []const u8 {
     return switch (job) {
         .child => "a child helping at home",
@@ -897,6 +1003,11 @@ test "typed phrase parsing is case insensitive and tolerates basic punctuation" 
     try std.testing.expectEqual(Intent.greeting, parseIntent(" HELLO! "));
     try std.testing.expectEqual(Intent.ask_name, parseIntent("What's your name?"));
     try std.testing.expectEqual(Intent.ask_work, parseIntent("WORK"));
+    try std.testing.expectEqual(Intent.ask_employment, parseIntent("Hire me!"));
+    try std.testing.expectEqual(Intent.ask_employment, parseIntent("paid work"));
+    try std.testing.expectEqual(Intent.buy_food, parseIntent("Buy food."));
+    try std.testing.expectEqual(Intent.rent_home, parseIntent("rent a room"));
+    try std.testing.expectEqual(Intent.rent_home, parseIntent("home"));
     try std.testing.expectEqual(Intent.ask_family, parseIntent("family"));
     try std.testing.expectEqual(Intent.ask_about, parseIntent("Tell me about supplies."));
     try std.testing.expectEqual(Intent.unknown, parseIntent("Tell me about ."));
@@ -929,6 +1040,61 @@ test "journal stores only explicit learned facts with a source" {
     try std.testing.expectEqual(@as(usize, 1), dialogue.journal_count);
     try std.testing.expectEqualStrings("Mara", dialogue.journal[0].source_name[0..dialogue.journal[0].source_name_len]);
     try std.testing.expectEqualStrings("The well is beside the granary.", dialogue.journal[0].text[0..dialogue.journal[0].text_len]);
+}
+
+test "life conversation executes real trades and learns only disclosed arrangements" {
+    const terrain_mod = @import("terrain.zig");
+    var terrain = try terrain_mod.Terrain.init(std.testing.allocator, terrain_mod.default_seed);
+    defer terrain.deinit();
+    const village = try village_mod.Village.init(&terrain);
+    var sim = sim_mod.Sim.init(&village, terrain.seed);
+    var social = people.Social.init(&sim, terrain.seed);
+    var ecology = ecology_mod.Ecology.init(&village, &sim, terrain.seed);
+    var life = life_mod.Life.init(&sim);
+    var dialogue = Dialogue{};
+    var farmer: ?u8 = null;
+    var keeper: ?u8 = null;
+    for (sim.residents[0..sim.resident_count]) |resident| {
+        if (resident.job == .farmer and farmer == null) farmer = resident.id;
+        if (resident.job == .keeper) keeper = resident.id;
+    }
+    try std.testing.expect(farmer != null and keeper != null);
+    dialogue.open(farmer.?, &social, &sim);
+    dialogue.submitTextWithLife("work", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(@as(?u8, null), life.employer_id);
+    dialogue.submitTextWithLife("hire me", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(farmer, life.employer_id);
+    try std.testing.expectEqual(@as(usize, 1), dialogue.known_count);
+    try std.testing.expect(std.mem.indexOf(u8, dialogue.reply[0..dialogue.reply_len], "hold G") != null);
+    const stock_before = sim.economy.food_stock_milli;
+    dialogue.submitTextWithLife("buy food", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(stock_before, sim.economy.food_stock_milli);
+    try std.testing.expect(std.mem.indexOf(u8, dialogue.reply[0..dialogue.reply_len], "keeper") != null);
+
+    dialogue.open(keeper.?, &social, &sim);
+    sim.economy.food_stock_milli = 1_999;
+    const coins_before = life.coins;
+    const food_before = life.food_milli;
+    dialogue.submitTextWithLife("buy food", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(coins_before, life.coins);
+    try std.testing.expectEqual(food_before, life.food_milli);
+    sim.economy.food_stock_milli = 4_000;
+    dialogue.submitTextWithLife("buy food", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(coins_before - 3, life.coins);
+    try std.testing.expectEqual(food_before + 2_000, life.food_milli);
+    try std.testing.expectEqual(@as(u64, 2_000), sim.economy.food_stock_milli);
+
+    dialogue.open(farmer.?, &social, &sim);
+    dialogue.submitTextWithLife("rent a room", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(@as(?u8, null), life.home_household);
+    social.recordPlayerAction(farmer.?, .helpful_work, sim.elapsed_seconds);
+    dialogue.submitTextWithLife("rent a room", &social, &sim, &ecology, &life, &village);
+    try std.testing.expectEqual(@as(?u8, sim.residents[farmer.?].household), life.home_household);
+    try std.testing.expect(std.mem.indexOf(u8, dialogue.reply[0..dialogue.reply_len], "first week") != null);
+    try std.testing.expectEqual(@as(usize, 1), dialogue.known_count);
+    const newest = dialogue.journal[(dialogue.journal_start + dialogue.journal_count - 1) % max_journal_entries];
+    try std.testing.expectEqual(JournalProvenance.direct_disclosure, newest.provenance);
+    try std.testing.expectEqualStrings(sim.residents[farmer.?].nameSlice(), newest.source_name[0..newest.source_name_len]);
 }
 
 fn testFixture() struct { sim: sim_mod.Sim, social: people.Social } {

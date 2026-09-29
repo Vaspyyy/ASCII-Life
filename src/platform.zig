@@ -494,9 +494,10 @@ fn onKeyboardKey(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, key: u32
     }
     self.countKeyEvent();
 
-    // F11 stays global in every mode; presses already held are ignored so
-    // compositor repeat cannot toggle fullscreen repeatedly.
+    // Function keys stay global while reading; presses already held are ignored
+    // so compositor repeat cannot save/reload or toggle fullscreen repeatedly.
     if (pressed and !was_down) {
+        if (key == 63 or key == 67) self.keys_pressed[key] = true;
         if (key == 87) {
             self.fullscreen = !self.fullscreen;
             if (self.toplevel) |toplevel| {

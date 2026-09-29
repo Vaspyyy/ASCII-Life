@@ -13,6 +13,10 @@ const Ecology = @import("ecology.zig").Ecology;
 const Dialogue = @import("dialogue.zig").Dialogue;
 const interaction = @import("interaction.zig");
 const world_clock = @import("world_clock.zig");
+const Life = @import("life.zig").Life;
+const life_ui = @import("life_ui.zig");
+const persistence = @import("persistence.zig");
+const save_file = @import("save_file.zig");
 const clock = @cImport({
     @cInclude("time.h");
     @cInclude("stdio.h");
@@ -80,7 +84,19 @@ fn run(init: std.process.Init.Minimal) !void {
     var width: u32 = 2560;
     var height: u32 = 1440;
     var pose: ?[5]f32 = null;
+    var settle = false;
+    var live_days: u64 = 0;
+    var farm_seconds: u64 = 0;
+    var life_report = false;
+    var life_panel = false;
+    var home_view = false;
+    var new_game = false;
+    var qa = false;
+    var save_path: ?[:0]const u8 = null;
+    var load_path: ?[:0]const u8 = null;
     while (args.next()) |arg| {
+        if (!std.mem.eql(u8, arg, "--new") and !std.mem.eql(u8, arg, "--size") and
+            !std.mem.eql(u8, arg, "--third-person") and !std.mem.eql(u8, arg, "--hide-hud")) qa = true;
         if (std.mem.eql(u8, arg, "--metrics")) metrics = true else if (std.mem.eql(u8, arg, "--static")) frozen = true else if (std.mem.eql(u8, arg, "--capture")) {
             capture_path = args.next() orelse return error.MissingCapturePath;
             frozen = true;
@@ -146,11 +162,32 @@ fn run(init: std.process.Init.Minimal) !void {
             for (&v) |*value| value.* = try finiteFloat(values.next() orelse return error.InvalidView);
             if (values.next() != null or @abs(v[0]) > 4096 or @abs(v[1]) > 4096 or @abs(v[2]) > 100 or @abs(v[3]) > 2 or v[4] < 0 or v[4] > 1500) return error.InvalidView;
             pose = v;
+        } else if (std.mem.eql(u8, arg, "--settle")) {
+            settle = true;
+        } else if (std.mem.eql(u8, arg, "--live-days")) {
+            live_days = try std.fmt.parseInt(u64, args.next() orelse return error.MissingDayCount, 10);
+            if (live_days > 3650) return error.InvalidDayCount;
+        } else if (std.mem.eql(u8, arg, "--farm-seconds")) {
+            farm_seconds = try std.fmt.parseInt(u64, args.next() orelse return error.MissingWorkSeconds, 10);
+            if (farm_seconds > 86400) return error.InvalidWorkSeconds;
+        } else if (std.mem.eql(u8, arg, "--life-report")) {
+            life_report = true;
+        } else if (std.mem.eql(u8, arg, "--life-panel")) {
+            life_panel = true;
+        } else if (std.mem.eql(u8, arg, "--home-view")) {
+            home_view = true;
+        } else if (std.mem.eql(u8, arg, "--new")) {
+            new_game = true;
+        } else if (std.mem.eql(u8, arg, "--save")) {
+            save_path = args.next() orelse return error.MissingSavePath;
+        } else if (std.mem.eql(u8, arg, "--load")) {
+            load_path = args.next() orelse return error.MissingLoadPath;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            log("ASCII-Life / Milestone 5\n--atlas        Developer geography overview\n--world-report Headless geography validation and peak scan\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze simulation and animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T step clock (dev) / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
+            log("ASCII-Life / Milestone 6\n--atlas        Developer geography overview\n--world-report Headless geography validation and peak scan\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze simulation and animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T step clock (dev) / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
             log("--village-report  Headless layout and residents report\n--simulate-days N Advance unattended village for QA (headless)\n--village-overview Elevated development view of the village\n", .{});
             log("F speak with nearby villager / J journal / Enter submit / Esc leave\nConversation understands: hello, name, work, family, news, plans,\nask about food, help, thanks, sorry, goodbye. Time pauses while reading.\n--people-report Headless social validation (including private QA state)\n--talk-to N     Developer conversation with resident index N\n--say TEXT      Submit a line (repeat up to 16 times; requires --talk-to)\n--journal       Open learned-information journal\n", .{});
             log("G hold near livestock pen to repair/guard (world time continues)\n--ecology-report Headless livestock/predator/accounting validation\n--pen-view      Developer viewpoint beside livestock\n--notice        Read public notice for QA if one exists\n--work-seconds N Perform N seconds of physical pen work for QA\n--elapsed-days N Advance days before native play/capture (QA)\n", .{});
+            log("K life panel / B sleep 8h / V live 7 days / N live 90 days (at rented home)\nF5 save / F9 reload / normal launch resumes and saves your life\n--new Start a new life / --save PATH / --load PATH explicit QA slots\n--settle Earn village work and home for QA / --live-days N Follow home routine\n--life-report Headless life validation / --life-panel Open life panel\n--home-view View rented home / --farm-seconds N Physical farm labor for QA\n", .{});
             return;
         } else return error.UnknownArgument;
     }
@@ -158,6 +195,15 @@ fn run(init: std.process.Init.Minimal) !void {
     if (line_count != 0 and talk_to == null) return error.DialogueNeedsSpeaker;
     if (tour and (talk_to != null or journal)) return error.TourDialogueConflict;
     if (tour and limit == 0) limit = 600;
+    if (new_game and load_path != null) return error.NewLoadConflict;
+    const default_slot = if (!qa) try save_file.defaultPath(std.heap.page_allocator) else null;
+    defer if (default_slot) |slot| std.heap.page_allocator.free(slot);
+    const write_slot: ?[:0]const u8 = save_path orelse default_slot;
+    const read_slot: ?[:0]const u8 = load_path orelse (if (!new_game) default_slot else null);
+    const loaded = if (read_slot) |slot| try save_file.read(std.heap.page_allocator, slot) else null;
+    defer if (loaded) |data| std.heap.page_allocator.free(data);
+    if (load_path != null and loaded == null) return error.SaveNotFound;
+    if (loaded) |data| seed = try persistence.savedSeed(data);
     const generation_start = now(clock.CLOCK_MONOTONIC);
     var terrain = try terrain_mod.Terrain.init(std.heap.page_allocator, seed);
     defer terrain.deinit();
@@ -171,16 +217,36 @@ fn run(init: std.process.Init.Minimal) !void {
     var sim = Sim.init(&village, seed);
     var social = Social.init(&sim, seed);
     var ecology = Ecology.init(&village, &sim, seed);
-    world_clock.advanceWithEcology(&sim, &social, &village, &ecology, @intFromFloat(time_of_day * 86400));
-    world_clock.advanceWithEcology(&sim, &social, &village, &ecology, simulate_days * 86400);
+    var life = Life.init(&sim);
     var dialogue: Dialogue = .{};
+    terrain.start = village.arrival;
+    var camera = Camera.init(&terrain);
+    if (loaded) |data| {
+        try persistence.decode(data, &village, &sim, &social, &ecology, &life, &dialogue, &camera);
+        log("loaded={s} bytes={d}\n", .{ read_slot.?, data.len });
+    } else world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .idle, camera.player_x, camera.player_z, @intFromFloat(time_of_day * 86400));
+    world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .idle, camera.player_x, camera.player_z, simulate_days * 86400);
+    if (settle) try settleLife(&sim, &social, &village, &ecology, &life, &dialogue, &camera, &terrain);
+    if (home_view) try moveHome(&camera, &terrain, &village, &life);
+    if (live_days > 0) {
+        if (!life.canSkip(&sim, &village, camera.player_x, camera.player_z) or !onGround(&camera, &village)) return error.StableHomeRequired;
+        const before = sim.elapsed_seconds;
+        world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .routine, camera.player_x, camera.player_z, live_days * 86400);
+        log("live_days_requested={d} life_advanced_seconds={d}\n", .{ live_days, sim.elapsed_seconds - before });
+        if (sim.elapsed_seconds - before != live_days * 86400) log("life_routine_interrupted=1\n", .{});
+    }
+    if (farm_seconds != 0) {
+        const field = life.fieldPoint(&sim, &village) orelse return error.EmploymentRequired;
+        camera.setPose(&terrain, field.x, field.z, 0, -0.12, 0);
+        world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .field, field.x, field.z, farm_seconds);
+    }
     if (talk_to) |speaker| {
         if (speaker >= sim.resident_count) return error.InvalidResident;
         dialogue.open(speaker, &social, &sim);
         for (lines[0..line_count]) |line| {
             if (!dialogue.active) return error.ConversationEnded;
             for (line) |ch| dialogue.addChar(ch);
-            dialogue.submitWithEcology(&social, &sim, &ecology);
+            dialogue.submitWithLife(&social, &sim, &ecology, &life, &village);
             if (people_report) log("said={s}\nreply={s}\n", .{ line, dialogue.reply[0..dialogue.reply_len] });
         }
     }
@@ -189,22 +255,22 @@ fn run(init: std.process.Init.Minimal) !void {
         var left = practice_work;
         while (left != 0) {
             const step = @min(left, 3600 - sim.elapsed_seconds % 3600);
-            world_clock.advanceWorking(&sim, &social, &village, &ecology, ecology.pen.x, ecology.pen.z, step);
+            world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .pen, ecology.pen.x, ecology.pen.z, step);
             left -= step;
         }
     }
     if (notice_view) dialogue.openNotice(&ecology, &social, &sim);
     if (journal) dialogue.toggleJournal();
-    if (village_report or people_report or ecology_report) {
+    if (village_report or people_report or ecology_report or life_report) {
         try reportVillage(&village, &sim);
         if (people_report or ecology_report) try reportPeople(&sim, &social, &dialogue);
         if (ecology_report) try reportEcology(&ecology, &sim);
+        if (life_report) try reportLife(&life, &sim, &camera);
+        if (write_slot) |slot| try saveLife(slot, &sim, &social, &ecology, &life, &dialogue, &camera);
         return;
     }
-    terrain.start = village.arrival;
-    var camera = Camera.init(&terrain);
     if (overview) camera.setPose(&terrain, village.center.x - 85, village.center.z - 100, 0.65, -0.32, 60);
-    camera.third_person = third_person;
+    if (loaded == null or third_person) camera.third_person = third_person;
     if (pose) |v| camera.setPose(&terrain, v[0], v[1], v[2], v[3], v[4]);
     if (talk_to) |speaker| try approachSpeaker(&camera, &terrain, &village, &sim, speaker);
     if (pen_view) camera.setPose(&terrain, ecology.pen.x, ecology.pen.z - 13, 0, -0.13, 0);
@@ -214,7 +280,7 @@ fn run(init: std.process.Init.Minimal) !void {
     var window: platform.Platform = .{ .width = width, .height = height };
     try window.init();
     defer window.deinit();
-    window.setTextMode(dialogue.active or dialogue.journal_open);
+    window.setTextMode(dialogue.active or dialogue.journal_open or life_panel);
     while (!window.configured and window.running) try window.wait(100);
     if (!window.running) return;
     var renderer: Renderer = .{};
@@ -235,6 +301,8 @@ fn run(init: std.process.Init.Minimal) !void {
     var sim_fraction_ns: u64 = 0;
     var tour_changed_view = false;
     var tour_step_pending = false;
+    var feedback: []const u8 = "";
+    var feedback_until: u64 = 0;
     while (window.running) {
         const frame_start = now(clock.CLOCK_MONOTONIC);
         const cpu_start = now(clock.CLOCK_THREAD_CPUTIME_ID);
@@ -255,14 +323,55 @@ fn run(init: std.process.Init.Minimal) !void {
         const dt: f32 = if (tour) 1.0 / 60.0 else @min(0.1, @as(f32, @floatFromInt(frame_start - previous_time)) / 1e9);
         previous_time = frame_start;
         var input: CameraInput = .{};
-        if (capture_path == null and !tour and !dialogue.active and !dialogue.journal_open) {
+        if (capture_path == null and !tour and window.takePressed(63)) {
+            if (write_slot orelse read_slot) |slot| {
+                if (saveLife(slot, &sim, &social, &ecology, &life, &dialogue, &camera)) |_| feedback = "Life saved." else |err| {
+                    feedback = "Save failed; see log.";
+                    log("save_error={s}\n", .{@errorName(err)});
+                }
+            } else feedback = "This QA run has no save slot; use --save PATH.";
+            feedback_until = frame_start + 6_000_000_000;
+        }
+        if (capture_path == null and !tour and window.takePressed(67)) {
+            if (write_slot orelse read_slot) |slot| {
+                if (loadLife(slot, &village, &sim, &social, &ecology, &life, &dialogue, &camera)) |_| {
+                    feedback = "Life restored.";
+                    sim_fraction_ns = 0;
+                    life_panel = false;
+                } else |err| {
+                    feedback = "Reload failed; current life preserved.";
+                    log("load_error={s}\n", .{@errorName(err)});
+                }
+            } else feedback = "This QA run has no save slot; use --load PATH.";
+            feedback_until = frame_start + 6_000_000_000;
+        }
+        if (capture_path == null and !tour and life_panel and window.takePressed(37)) life_panel = false;
+        if (capture_path == null and !tour and !life_panel and !dialogue.active and !dialogue.journal_open) {
             if (window.takePressed(33)) {
                 if (interaction.target(&sim, &village, &camera)) |speaker| {
                     dialogue.open(speaker, &social, &sim);
                 } else if (nearNotice(&village, &camera) and ecology.notice) dialogue.openNotice(&ecology, &social, &sim);
             }
             if (window.takePressed(36)) dialogue.toggleJournal();
-            window.setTextMode(dialogue.active or dialogue.journal_open);
+            if (window.takePressed(37)) life_panel = true;
+            var skip_seconds: u64 = 0;
+            var skip_mode: world_clock.LifeMode = .routine;
+            if (window.takePressed(48)) {
+                skip_seconds = 8 * 3600;
+                skip_mode = .idle;
+            }
+            if (window.takePressed(47)) skip_seconds = 7 * 86400;
+            if (window.takePressed(49)) skip_seconds = 90 * 86400;
+            if (skip_seconds > 0) {
+                if (life.canSkip(&sim, &village, camera.player_x, camera.player_z) and onGround(&camera, &village)) {
+                    const before = sim.elapsed_seconds;
+                    world_clock.advanceLife(&sim, &social, &village, &ecology, &life, skip_mode, camera.player_x, camera.player_z, skip_seconds);
+                    feedback = if (sim.elapsed_seconds - before == skip_seconds) "Your village days have passed." else "Routine stopped: eat, recover, or secure your rented home.";
+                    previous_time = now(clock.CLOCK_MONOTONIC);
+                } else feedback = "Return to your rented door, fed and rested, before passing time.";
+                feedback_until = now(clock.CLOCK_MONOTONIC) + 6_000_000_000;
+            }
+            window.setTextMode(dialogue.active or dialogue.journal_open or life_panel);
             input = .{
                 .forward = axis(&window, 17, 31),
                 .strafe = axis(&window, 32, 30),
@@ -274,12 +383,14 @@ fn run(init: std.process.Init.Minimal) !void {
             };
             if (window.takePressed(35)) show_hud = !show_hud;
             if (window.takePressed(19)) camera = starting_camera;
-            if (window.takePressed(20)) world_clock.advanceWithEcology(&sim, &social, &village, &ecology, 10800); // Development clock step, not unlocked player rest.
+            if (window.takePressed(20)) world_clock.advanceLife(&sim, &social, &village, &ecology, &life, .idle, camera.player_x, camera.player_z, 10800); // Development clock step, not unlocked player rest.
         }
         for (window.takeTextEvents()) |event| {
             switch (event) {
                 .character => |ch| {
-                    if (dialogue.journal_open) {
+                    if (life_panel) {
+                        if (std.ascii.toLower(ch) == 'k') life_panel = false;
+                    } else if (dialogue.journal_open) {
                         switch (std.ascii.toLower(ch)) {
                             'j' => dialogue.toggleJournal(),
                             'n' => dialogue.pageJournal(1),
@@ -289,11 +400,13 @@ fn run(init: std.process.Init.Minimal) !void {
                     } else dialogue.addChar(ch);
                 },
                 .backspace => dialogue.backspace(),
-                .submit => dialogue.submitWithEcology(&social, &sim, &ecology),
-                .cancel => if (dialogue.journal_open) dialogue.toggleJournal() else dialogue.close(),
+                .submit => if (!life_panel) dialogue.submitWithLife(&social, &sim, &ecology, &life, &village),
+                .cancel => if (life_panel) {
+                    life_panel = false;
+                } else if (dialogue.journal_open) dialogue.toggleJournal() else dialogue.close(),
             }
         }
-        window.setTextMode(dialogue.active or dialogue.journal_open);
+        window.setTextMode(dialogue.active or dialogue.journal_open or life_panel);
         if (tour and !tour_step_pending) {
             const toggle = frames >= limit / 2 and !tour_changed_view;
             if (toggle) tour_changed_view = true;
@@ -302,8 +415,8 @@ fn run(init: std.process.Init.Minimal) !void {
         const advance = !tour or !tour_step_pending;
         window.look_dx = 0;
         window.look_dy = 0;
-        camera.updateInVillage(&terrain, &village, input, if (capture_path != null or !advance) 0 else dt);
-        if (advance and !frozen and !dialogue.active and !dialogue.journal_open and (tour or !window.paused)) {
+        camera.updateInVillage(&terrain, &village, input, if (capture_path != null or !advance or life_panel or dialogue.active or dialogue.journal_open) 0 else dt);
+        if (advance and !frozen and !life_panel and !dialogue.active and !dialogue.journal_open and (tour or !window.paused)) {
             animation_seconds = @mod(animation_seconds + dt, 86400);
             const work_seconds: u64 = if (tour) 1 else blk: {
                 sim_fraction_ns += @as(u64, @intFromFloat(dt * 1e9)) * 60;
@@ -313,16 +426,33 @@ fn run(init: std.process.Init.Minimal) !void {
             };
             const repairs_before = ecology.player_repaired;
             const guards_before = ecology.guard_defenses;
-            if (window.keys_down[34] and @abs(camera.player_y - village.surfaceY(camera.player_x, camera.player_z)) < 1) {
-                world_clock.advanceWorking(&sim, &social, &village, &ecology, camera.player_x, camera.player_z, work_seconds);
-            } else world_clock.advanceWithEcology(&sim, &social, &village, &ecology, work_seconds);
+            var mode: world_clock.LifeMode = .idle;
+            if (window.keys_down[34] and onGround(&camera, &village)) {
+                if (life.fieldPoint(&sim, &village)) |field| {
+                    const dx = field.x - camera.player_x;
+                    const dz = field.z - camera.player_z;
+                    if (dx * dx + dz * dz <= 81 and life.workReady(&sim, &village)) mode = .field;
+                }
+                if (mode != .field) {
+                    const dx = ecology.pen.x - camera.player_x;
+                    const dz = ecology.pen.z - camera.player_z;
+                    if (dx * dx + dz * dz <= 81) mode = .pen;
+                }
+            }
+            world_clock.advanceLife(&sim, &social, &village, &ecology, &life, mode, camera.player_x, camera.player_z, work_seconds);
             if (ecology.player_repaired > repairs_before) dialogue.recordLearnedWithContext(@import("people.zig").player_id, "You", "I finished mending the sheep pen with village materials.", @intCast(sim.day()), .witnessed, @import("people.zig").player_id, "You");
             if (ecology.guard_defenses > guards_before) dialogue.recordLearnedWithContext(@import("people.zig").player_id, "You", "I drove a hungry wolf away from the sheep pen while keeping watch.", @intCast(sim.day()), .witnessed, @import("people.zig").player_id, "You");
         }
         time_of_day = sim.timeOfDay();
         if (tour) tour_step_pending = true;
-        if (atlas) landscape.fillAtlas(&cells, &terrain, camera.view(&terrain)) else landscape.fillVillageWithEcology(&cells, &terrain, camera.villageView(&terrain, &village), time_of_day, animation_seconds, show_hud and !dialogue.active and !dialogue.journal_open, &village, &sim, &ecology);
-        if (show_hud and !atlas and !dialogue.active and !dialogue.journal_open) {
+        if (atlas) landscape.fillAtlas(&cells, &terrain, camera.view(&terrain)) else landscape.fillVillageWithEcology(&cells, &terrain, camera.villageView(&terrain, &village), time_of_day, animation_seconds, show_hud and !life_panel and !dialogue.active and !dialogue.journal_open, &village, &sim, &ecology);
+        if (show_hud and !atlas and !life_panel and !dialogue.active and !dialogue.journal_open) {
+            life_ui.paintStatus(&cells, &life, &sim);
+            if (life.fieldPoint(&sim, &village)) |field| {
+                const dx = field.x - camera.player_x;
+                const dz = field.z - camera.player_z;
+                if (dx * dx + dz * dz <= 81 and onGround(&camera, &village)) scene.label(&cells, 4, scene.rows - 14, if (life.workReady(&sim, &village)) "HOLD G: PAID FARM WORK" else "YOUR FIELD / WAIT FOR WORKING HOURS", scene.rgb(255, 225, 159));
+            }
             scene.label(&cells, 4, scene.rows - 8, "J JOURNAL", scene.rgb(207, 222, 216));
             const px = camera.player_x - ecology.pen.x;
             const pz = camera.player_z - ecology.pen.z;
@@ -332,6 +462,8 @@ fn run(init: std.process.Init.Minimal) !void {
             } else if (ecology.notice and nearNotice(&village, &camera)) scene.label(&cells, 4, scene.rows - 12, "F READ NOTICE AT WELL", scene.rgb(255, 225, 159));
         }
         dialogue.paint(&cells);
+        if (life_panel) life_ui.paintHomePanel(&cells, &life, &sim, &village, &dialogue, camera.player_x, camera.player_z);
+        if (frame_start < feedback_until) scene.label(&cells, 4, scene.rows - 5, feedback, scene.rgb(255, 225, 159));
         try renderer.draw(&cells, scene.cols, scene.rows);
         cpu_ns += now(clock.CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         wall_ns += now(clock.CLOCK_MONOTONIC) - frame_start;
@@ -358,6 +490,7 @@ fn run(init: std.process.Init.Minimal) !void {
         // and when the compositor cannot present (e.g. a hidden window).
         sleepUntil(frame_start + 16_666_667);
     }
+    if (write_slot) |slot| try saveLife(slot, &sim, &social, &ecology, &life, &dialogue, &camera);
     if (metrics and frames > 0) {
         const n: f64 = @floatFromInt(attempts);
         log("frames={d} draw_attempts={d} frame_thread_cpu_ms={d:.4} frame_work_wall_ms={d:.4} elapsed_ms={d:.2} key_events={d} pointer_events={d} resizes={d}\n", .{ frames, attempts, @as(f64, @floatFromInt(cpu_ns)) / n / 1e6, @as(f64, @floatFromInt(wall_ns)) / n / 1e6, @as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - started)) / 1e6, window.key_events, window.pointer_events, resize_count });
@@ -366,6 +499,7 @@ fn run(init: std.process.Init.Minimal) !void {
         try reportVillage(&village, &sim);
         try reportPeople(&sim, &social, &dialogue);
         try reportEcology(&ecology, &sim);
+        try reportLife(&life, &sim, &camera);
         const cache_stats = terrain.cache.stats();
         log("output={d}x{d} grid={d}x{d} tile_hits={d} tile_misses={d} tile_evictions={d}\n", .{ window.width, window.height, scene.cols, scene.rows, cache_stats.hits, cache_stats.misses, cache_stats.evictions });
         log("view={d:.2},{d:.2},{d:.3},{d:.3},{d:.2} third_person={} time={d:.4}\n", .{ camera.player_x, camera.player_z, camera.yaw, camera.pitch, camera.player_y - terrain.standingHeight(camera.player_x, camera.player_z), camera.third_person, time_of_day });
@@ -515,4 +649,63 @@ fn reportEcology(ecology: *const Ecology, sim: *const Sim) !void {
     try ecology.validate(sim);
     log("ecology_validation_ok=1 ecology_fingerprint={x} livestock_owner={d} pen={d:.2},{d:.2} animals={d} initial_animals={d} losses={d} attacks={d} defenses={d} repairs={d} fence={d} guard_defenses={d} player_repairs={d} npc_assists={d} neighbor_repairs={d} notice={} volunteered={} player_work_seconds={d}\n", .{ ecology.fingerprint(), ecology.owner_id, ecology.pen.x, ecology.pen.z, ecology.animals, ecology.initial_animals, ecology.losses, ecology.attacks, ecology.defenses, ecology.repaired, ecology.fence, ecology.guard_defenses, ecology.player_repaired, ecology.npc_assists, ecology.neighbor_repairs, ecology.notice, ecology.player_volunteered, ecology.player_work_seconds });
     log("livestock_food_produced={d} livestock_food_lost={d} repair_goods_consumed={d}\n", .{ sim.economy.livestock_food_produced_milli, sim.economy.livestock_food_lost_milli, sim.economy.repair_goods_consumed_milli });
+}
+
+fn onGround(camera: *const Camera, village: *const Village) bool {
+    return @abs(camera.player_y - village.surfaceY(camera.player_x, camera.player_z)) < 1;
+}
+
+fn moveHome(camera: *Camera, terrain: *const terrain_mod.Terrain, village: *const Village, life: *const Life) !void {
+    const home = life.home_building orelse return error.StableHomeRequired;
+    const door = village.doorPoint(home);
+    camera.setPose(terrain, door.x, door.z, 0, -0.12, 0);
+}
+
+fn settleLife(sim: *Sim, social: *Social, village: *const Village, ecology: *Ecology, life: *Life, dialogue: *Dialogue, camera: *Camera, terrain: *const terrain_mod.Terrain) !void {
+    if (life.home_household != null) return moveHome(camera, terrain, village, life);
+    var farmer: ?u8 = life.employer_id;
+    if (farmer == null) for (sim.residents[0..sim.resident_count]) |resident| {
+        if (resident.job == .farmer and resident.employed) {
+            farmer = resident.id;
+            break;
+        }
+    };
+    const id = farmer orelse return error.NoFarmer;
+    dialogue.open(id, social, sim);
+    for ("name") |ch| dialogue.addChar(ch);
+    dialogue.submitWithLife(social, sim, ecology, life, village);
+    if (!life.hire(id, sim, social)) return error.EmploymentRefused;
+    const field = life.fieldPoint(sim, village) orelse return error.NoFarm;
+    camera.setPose(terrain, field.x, field.z, 0, -0.12, 0);
+    const deadline = sim.elapsed_seconds + 2 * 86400;
+    while (life.paid_hours < 4 and sim.elapsed_seconds < deadline) {
+        const step = @min(3600 - sim.elapsed_seconds % 3600, life.workPeriodRemaining());
+        world_clock.advanceLife(sim, social, village, ecology, life, .field, field.x, field.z, step);
+    }
+    if (life.paid_hours < 4) return error.FarmWorkUnavailable;
+    if (!life.rentHome(id, sim, social)) return error.HousingRefused;
+    dialogue.recordLearnedWithContext(@import("people.zig").player_id, "You", "I earned farm wages and rented a room in the village.", @intCast(sim.day()), .witnessed, @import("people.zig").player_id, "You");
+    dialogue.close();
+    try moveHome(camera, terrain, village, life);
+}
+
+fn saveLife(path: [:0]const u8, sim: *const Sim, social: *const Social, ecology: *const Ecology, life: *const Life, dialogue: *const Dialogue, camera: *const Camera) !void {
+    const data = try persistence.encode(std.heap.page_allocator, sim, social, ecology, life, dialogue, camera);
+    defer std.heap.page_allocator.free(data);
+    try save_file.write(path, data);
+    log("saved={s} save_bytes={d}\n", .{ path, data.len });
+}
+
+fn loadLife(path: [:0]const u8, village: *const Village, sim: *Sim, social: *Social, ecology: *Ecology, life: *Life, dialogue: *Dialogue, camera: *Camera) !void {
+    const data = (try save_file.read(std.heap.page_allocator, path)) orelse return error.SaveNotFound;
+    defer std.heap.page_allocator.free(data);
+    try persistence.decode(data, village, sim, social, ecology, life, dialogue, camera);
+}
+
+fn reportLife(life: *const Life, sim: *const Sim, camera: *const Camera) !void {
+    try life.validate(sim);
+    log("life_validation_ok=1 life_fingerprint={x} age_years={d} coins={d} food_milli={d} hunger={d} fatigue={d} paid_hours={d} skill={d}\n", .{ life.fingerprint(), life.age_years, life.coins, life.food_milli, life.hunger, life.fatigue, life.paid_hours, life.skill });
+    log("calendar_year={d} season={s} season_day={d} employer={d} home_household={d} home_building={d} work_seconds={d} food_shortage_milli={d}\n", .{ sim.day() / 360 + 1, @tagName(@import("life.zig").season(sim.elapsed_seconds)), sim.day() % 90 + 1, if (life.employer_id) |id| @as(i16, id) else -1, if (life.home_household) |id| @as(i16, id) else -1, if (life.home_building) |id| @as(i16, id) else -1, life.work_seconds, life.food_shortage_milli });
+    log("player_wages_paid={d} player_rent_payments={d} player_food_payments={d} player_food_produced_milli={d} player_food_provisioned_milli={d}\n", .{ sim.economy.player_wages_paid, sim.economy.player_rent_payments, sim.economy.player_food_payments, sim.economy.player_food_produced_milli, sim.economy.player_food_provisioned_milli });
+    log("life_view={d:.4},{d:.4},{d:.4} life_arrived_at={d} life_elapsed_seconds={d}\n", .{ camera.player_x, camera.player_y, camera.player_z, life.arrived_at, sim.elapsed_seconds });
 }

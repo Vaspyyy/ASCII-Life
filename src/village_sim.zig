@@ -97,6 +97,11 @@ pub const Economy = struct {
     livestock_food_produced_milli: u64 = 0,
     livestock_food_lost_milli: u64 = 0,
     repair_goods_consumed_milli: u64 = 0,
+    player_food_provisioned_milli: u64 = 0,
+    player_food_produced_milli: u64 = 0,
+    player_wages_paid: u64 = 0,
+    player_food_payments: u64 = 0,
+    player_rent_payments: u64 = 0,
     initial_food_milli: u64 = 0,
     initial_goods_milli: u64 = 0,
     initial_water_milli: u64 = 0,
@@ -113,12 +118,15 @@ pub const Sim = struct {
     economy: Economy = .{},
     elapsed_seconds: u64 = 0,
     world_seed: u64 = 0,
+    /// Fingerprint of deterministic generated geometry, not evolved state.
+    generation_layout: u64 = 0,
     food_stock_capacity_milli: u64 = 0,
     goods_stock_capacity_milli: u64 = 0,
     water_stock_capacity_milli: u64 = 0,
+    seasonal_farming: bool = false,
 
     pub fn init(village: *const Village, seed: u64) Sim {
-        var self = Sim{ .world_seed = seed };
+        var self = Sim{ .world_seed = seed, .generation_layout = generatedLayout(village) };
         var homes: [max_households]usize = undefined;
         var home_count: usize = 0;
         var work_buildings: [max_paths]usize = undefined;
@@ -263,6 +271,12 @@ pub const Sim = struct {
         h = mixHash(h, self.economy.livestock_food_produced_milli);
         h = mixHash(h, self.economy.livestock_food_lost_milli);
         h = mixHash(h, self.economy.repair_goods_consumed_milli);
+        h = mixHash(h, self.seasonal_farming);
+        h = mixHash(h, self.economy.player_food_provisioned_milli);
+        h = mixHash(h, self.economy.player_food_produced_milli);
+        h = mixHash(h, self.economy.player_wages_paid);
+        h = mixHash(h, self.economy.player_food_payments);
+        h = mixHash(h, self.economy.player_rent_payments);
         h = mixHash(h, self.economy.goods_produced_milli);
         h = mixHash(h, self.economy.water_produced_milli);
         h = mixHash(h, self.economy.food_consumed_milli);
@@ -330,7 +344,8 @@ pub const Sim = struct {
             if (resident.route_count != 0 and resident.at_target) return error.InvalidState;
             if (village.blocked(resident.position.x, resident.position.z, 0.15)) return error.InvalidState;
         }
-        if (self.economy.initial_food_milli + self.economy.food_produced_milli + self.economy.livestock_food_produced_milli != self.economy.food_stock_milli + self.economy.food_consumed_milli + self.economy.food_discarded_milli + self.economy.livestock_food_lost_milli) return error.InvalidState;
+        if (self.economy.initial_food_milli + self.economy.food_produced_milli + self.economy.livestock_food_produced_milli != self.economy.food_stock_milli + self.economy.food_consumed_milli + self.economy.food_discarded_milli + self.economy.livestock_food_lost_milli + self.economy.player_food_provisioned_milli) return error.InvalidState;
+        if (self.economy.player_food_produced_milli > self.economy.food_produced_milli) return error.InvalidState;
         if (self.economy.initial_goods_milli + self.economy.goods_produced_milli != self.economy.goods_stock_milli + self.economy.goods_consumed_milli + self.economy.goods_discarded_milli + self.economy.repair_goods_consumed_milli) return error.InvalidState;
         if (self.economy.initial_water_milli + self.economy.water_produced_milli != self.economy.water_stock_milli + self.economy.water_consumed_milli + self.economy.water_discarded_milli) return error.InvalidState;
         if (self.economy.work_seconds != self.economy.farmer_work_seconds + self.economy.craft_work_seconds + self.economy.keeper_work_seconds + self.economy.water_work_seconds) return error.InvalidState;
@@ -404,7 +419,8 @@ pub const Sim = struct {
             switch (resident.job) {
                 .farmer => {
                     self.economy.farmer_work_seconds += dt;
-                    const produced = accrueWork(dt, 3_200, &resident.work_remainder);
+                    const rate: u64 = if (self.seasonal_farming) seasonalFarmRate(self.elapsed_seconds) else 3_200;
+                    const produced = accrueWork(dt, rate, &resident.work_remainder);
                     self.addFood(produced);
                 },
                 .craftsperson => {
@@ -443,7 +459,7 @@ pub const Sim = struct {
         }
     }
 
-    fn addFood(self: *Sim, amount: u64) void {
+    pub fn addFood(self: *Sim, amount: u64) void {
         self.economy.food_produced_milli += amount;
         const space = self.food_stock_capacity_milli -| self.economy.food_stock_milli;
         const stored = @min(space, amount);
@@ -490,9 +506,68 @@ pub const Sim = struct {
         self.economy.water_consumed_milli += served;
         self.economy.water_shortage_milli += demand - served;
     }
+
+    /// Rebuild disposable route geometry from its saved cause. The caller has
+    /// restored the current pose, target and absolute travel times already.
+    pub fn restoreMovement(self: *const Sim, village: *const Village, resident: *Resident, origin: ?Point) !void {
+        resident.route_count = 0;
+        resident.route_length = 0;
+        if (origin == null) return;
+        if (resident.at_target or resident.activity != .walking or resident.target_building >= village.building_count or
+            resident.route_started > self.elapsed_seconds or resident.route_arrives <= self.elapsed_seconds) return error.InvalidState;
+        const source = origin.?;
+        if (!std.math.isFinite(source.x) or !std.math.isFinite(source.z) or @abs(source.x) > 4096 or @abs(source.z) > 4096) return error.InvalidState;
+        const target_point = personalTarget(village, resident, resident.target_building);
+        const start = Position{ .x = source.x, .y = 0, .z = source.z };
+        const target = Position{ .x = target_point.x, .y = 0, .z = target_point.z };
+        var count: usize = 0;
+        if (!makeRoadRoute(village, start, target, &resident.route_points, &count) or count < 2) return error.InvalidState;
+        resident.route_points[0] = source;
+        resident.route_count = @intCast(count);
+        resident.route_length = polylineLength(resident.route_points[0..count]);
+        const duration: u64 = @intFromFloat(@ceil(resident.route_length / walk_speed));
+        if (resident.route_length <= 0.25 or resident.route_started +| duration != resident.route_arrives) return error.InvalidState;
+        const expected = positionOnRoute(resident, self.elapsed_seconds);
+        if (@abs(expected.x - resident.position.x) > 0.01 or @abs(expected.z - resident.position.z) > 0.01) return error.InvalidState;
+    }
 };
 
+/// Stable generated-layout identity; hash explicit geometry rather than native
+/// struct bytes, padding, pointer addresses or unused array elements.
+pub fn generatedLayout(village: *const Village) u64 {
+    var h = hash64(village.seed);
+    h = mixHash(h, village.building_count);
+    h = mixHash(h, village.path_count);
+    for (village.buildingsSlice(), 0..) |building, index| {
+        inline for (.{ "x", "y", "z", "width", "depth", "height" }) |field| h = mixHash(h, @as(u32, @bitCast(@field(building, field))));
+        h = mixHash(h, @intFromEnum(building.kind));
+        h = mixHash(h, building.seed);
+        h = mixHash(h, @as(u32, @bitCast(village.entry_points[index].x)));
+        h = mixHash(h, @as(u32, @bitCast(village.entry_points[index].z)));
+    }
+    for (village.pathsSlice()) |path| {
+        h = mixHash(h, @as(u32, @bitCast(path.a.x)));
+        h = mixHash(h, @as(u32, @bitCast(path.a.z)));
+        h = mixHash(h, @as(u32, @bitCast(path.b.x)));
+        h = mixHash(h, @as(u32, @bitCast(path.b.z)));
+        h = mixHash(h, @as(u32, @bitCast(path.width)));
+    }
+    return h;
+}
+
 const Schedule = struct { building: usize, activity: Activity };
+
+/// A storage-supported agricultural year: spring planting, summer growth,
+/// autumn harvest and winter stored/preserved provisions. Integer rates retain
+/// exact work partitioning. Enabled only by the ordinary-life layer.
+pub fn seasonalFarmRate(seconds: u64) u64 {
+    return switch ((seconds / seconds_per_day / 90) % 4) {
+        0 => 3_200,
+        1 => 4_800,
+        2 => 6_400,
+        else => 1_600,
+    };
+}
 
 fn scheduleFor(time: u64, resident: *const Resident) Schedule {
     const seconds = time % seconds_per_day;

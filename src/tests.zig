@@ -13,5 +13,8 @@ test {
     _ = @import("dialogue.zig");
     _ = @import("world_clock.zig");
     _ = @import("ecology.zig");
+    _ = @import("life.zig");
+    _ = @import("life_ui.zig");
+    _ = @import("persistence.zig");
     _ = @import("landscape.zig");
 }

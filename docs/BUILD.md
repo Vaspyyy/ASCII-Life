@@ -1,6 +1,6 @@
 # Building and exploring ASCII-Life
 
-Milestone 4 adds social identities, beliefs, memory, local conversation and a learned-information journal to the inhabited village. It uses the native glyph renderer without an engine or external visual assets. World history, combat and save files remain later work.
+Milestone 6 adds an ordinary village life with paid farm work, provisions, a rented home, seasons, aging and persistent saves. It uses the native glyph renderer without an engine or external visual assets. Combat and deeper generational events remain later work.
 
 ## Development environment
 
@@ -38,10 +38,13 @@ The default xdg-shell XML location is `/usr/share/wayland-protocols/stable/xdg-s
 - **H:** hide/show the compact control labels.
 - **F11:** toggle fullscreen (also exercises compositor resize and swapchain recreation).
 - **F:** speak with a nearby visible villager. Type a phrase and press **Enter**; **Backspace** edits it. **Escape** leaves the conversation.
-- **G:** hold beside the livestock pen to repair its fence and guard the animals while time continues.
+- **G:** hold at your employer's field entrance for paid labor while the farmer is present; elsewhere beside the livestock pen, repair or guard the animals.
 - **F near the well:** read a posted household notice when no resident is targeted.
 - **J:** open the learned-information journal; **N/P** page through it; **J/Escape** closes it. Conversation and journal reading pause world time.
-- **Escape:** close the game when no conversation or journal is open.
+- **K:** open/close your life panel; reading pauses time.
+- **B/V/N:** at your rented door, sleep eight hours / live seven days / live ninety days. Longer routines require manageable needs and stop if the safe anchor or needs fail.
+- **F5/F9:** save/reload the ordinary local slot. Normal play resumes the slot and saves on exit; `--new` starts fresh.
+- **Escape:** close the game when no conversation, journal or life panel is open.
 - Keyboard press/release and pointer events are counted in `--metrics` output.
 - `--capture PATH` saves the first actual Vulkan frame as an RGB PPM and exits; the image copy is allocated only on request. This provides visual QA without a desktop screenshot portal.
 - `--static` freezes the simulation and visual clock for repeatable inspection; camera movement remains available.
@@ -76,7 +79,7 @@ The runtime bundler writes a fresh `artifacts/ascii-life-runtime` directory and 
 
 ## Regional generation and native visual regression checks
 
-`python3 scripts/verify_m2.py` builds an optimized executable, checks six regional seeds headlessly, and performs 1440p native Vulkan captures under validation. It compares repeat runs pixel-for-pixel and exercises the development atlas, alternate seeds, night lighting and third-person views. The earlier `verify_m1.py` remains as historical foundation regression tooling. It requires an active Wayland session; `zig build test` remains display-independent.
+`python3 scripts/verify_m2.py` builds an optimized executable, checks six regional seeds headlessly, and performs 1440p native Vulkan captures under validation. It compares repeat runs pixel-for-pixel and exercises the development atlas, alternate seeds, night lighting and third-person views. The earlier `verify_m1.py` remains as historical foundation regression tooling. Native test captures use a private KWin virtual display; they never open desktop windows. `zig build test` remains display-independent.
 
 ```sh
 mkdir -p artifacts
@@ -119,3 +122,32 @@ python3 scripts/verify_m4.py
 ## Livestock and simulation needs
 
 See [PROBLEMS.md](PROBLEMS.md) for Milestone 5 gameplay and limits. Ask `ask about livestock`, `ask about wolves` or `help`. An informed resident can direct you to the pen. The household acts and predators can attack without player involvement; actual work and protection affect food, memories and trust. `--ecology-report` validates this state headlessly. `--pen-view` and `--elapsed-days N` support native inspection, while `--work-seconds N` exercises physical pen work for QA. Run `python3 scripts/verify_m5.py` for six-seed and native 1440p checks.
+
+## Background graphics QA
+
+`scripts/measure.py` and all native regression scripts now run through
+`scripts/background.py`. The runner uses installed `kwin_wayland --virtual`
+and `dbus-run-session`, with private runtime/config directories and a private
+D-Bus session. It opens no desktop window, uses no physical output and has no
+visible fallback. Failed clients propagate their exit status; cancellation
+cleans up the private display and client. These are test tools, not game runtime
+dependencies. A working hardware Vulkan driver is still required.
+
+```sh
+python3 scripts/background.py -- ./zig-out/bin/ascii-life --metrics --frames 120
+python3 scripts/measure.py --static
+python3 scripts/measure.py --tour
+```
+
+Report these as private-display/headless measurements. They exercise native
+Vulkan presentation and GPU readbacks, but do not measure the user's desktop
+compositor latency, physical scanout, live keyboard interactions or fullscreen
+behavior. Run the game normally only when you intend to play.
+
+## Ordinary life and saves
+
+See [LIFE.md](LIFE.md) for employment, food, rental eligibility, home-gated
+routines, save location and scope. `python3 scripts/verify_m6.py` checks
+multiple years and save continuation, followed by private 1440p GPU captures;
+`--headless-only` skips graphics entirely. Developer scenarios and benchmarks
+do not touch the ordinary-play save slot.

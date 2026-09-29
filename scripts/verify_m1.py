@@ -3,6 +3,7 @@
 import os
 import pathlib
 import subprocess
+import background
 
 root = pathlib.Path(__file__).resolve().parent.parent
 subprocess.run(["zig", "build", "-Doptimize=ReleaseSmall"], cwd=root, check=True)
@@ -17,7 +18,7 @@ binary = root / "zig-out/bin/ascii-life"
 
 def capture(name, *args):
     path = output / f"{name}.ppm"
-    result = subprocess.run([str(binary), "--size", "960x540", "--hide-hud",
+    result = background.run([str(binary), "--size", "960x540", "--hide-hud",
                              "--capture", str(path), *args], env=env, cwd="/tmp",
                             capture_output=True, text=True, timeout=90)
     (output / f"{name}.log").write_text(result.stdout + result.stderr)
@@ -36,7 +37,7 @@ assert base != capture("night", "--time", "0.02"), "time does not change lightin
 assert base != capture("third-person", "--third-person"), "camera view did not change"
 assert base != capture("moved", "--view", "200,-200,0.4,-0.1,20"), "viewpoint did not change"
 def tour(name):
-    result = subprocess.run([str(binary), "--size", "960x540", "--tour", "--frames", "120", "--metrics"],
+    result = background.run([str(binary), "--size", "960x540", "--tour", "--frames", "120", "--metrics"],
                             env=env, cwd="/tmp", capture_output=True, text=True, timeout=90)
     (output / f"{name}.log").write_text(result.stdout + result.stderr)
     assert result.returncode == 0 and "VUID-" not in result.stderr and "Validation Error" not in result.stderr

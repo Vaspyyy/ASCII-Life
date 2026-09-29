@@ -425,3 +425,101 @@ CPU-equivalent FPS is arithmetic main-thread capacity, **not measured uncapped p
 - `scripts/verify_m5.py` passes native 1440p Vulkan validation captures for repeated pen, repair, third person, livestock conversation, signed notice/journal, physical notice board, night wolves and 28-day pen state. Repeat pen pixels are byte-identical. Pen, fence damage/repair, notice panel and predator readbacks were visually inspected. The new F/G native key paths were inspected in code; they were not exercised by a live native keyboard probe this milestone. Work correctness is verified through the same simulation path using the developer harness and clock tests.
 
 This is a bounded village-scale need-driven slice, not full animal ecology or combat. NPC repair effort is a coarse hourly allocation at the field checkpoint; player labor instead runs against exact clock/completion boundaries. Outcome knowledge and earned trust wait for the owner's inspection. Session state still has no save format, breeding or long-term animal replenishment. The initial flock can decline to zero while the wider village keeps running. See [PROBLEMS.md](PROBLEMS.md) for controls and simulation limits.
+
+## Milestone 6 A life — 2026-09-29
+
+Measured the M6 working tree based on `fa71ee51e49515f69287645554472aaaca31f9d9`,
+Zig 0.16.0 ReleaseSmall, CachyOS / NVIDIA RTX 3070, driver 615.71.09. The live
+power profile was **power-saver**. Source/build/shader digest using the M0
+procedure: `b10003ee1097cbbf895e81585455a6e3c799e2e445ad8392bdc56c2c6595b6c1`.
+ELF SHA-256: `2b2809fb603d6863afbb8232bf7de9189f0b2467b37de95201ab89c1577cec69`.
+
+| Distribution | Exact bytes | Change from M5 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 336,248 | +60,752 |
+| ELF compressed with `xz -9` | 151,432 | +24,216 |
+| Runtime bundle payload | 4,277,705 | +60,752 |
+| Runtime bundle `.tar.xz` | 1,514,352 | +23,968 |
+
+No game dependencies or external assets were added. The runtime library closure
+is unchanged. KWin and dbus-run-session are installed test infrastructure,
+excluded from the game and bundle. The bundled loader resolves every ordinary dependency within the bundle; its
+ELF hash matches the measured executable. It completed 120 private native
+1440p frames from `/tmp`, restoring the three-year life panel. The kernel,
+compositor and GPU driver/ICD remain host requirements; this is the same-host
+packaging experiment, not a cross-distribution guarantee.
+
+Version-one saves store generated causes
+and evolved state; the default-seed three-year verification save is **11,224
+bytes**, not a serialized terrain cache. Save size varies with bounded learned
+and social records.
+
+### Private-display 1440p runtime
+
+These measurements use **an isolated KWin virtual Wayland display**, with private
+runtime/config directories and a private D-Bus session. No desktop window or
+physical output is opened. This changes the display environment from the M5
+desktop measurements; RAM, VRAM and startup differences are not controlled
+feature-cost comparisons. The game process is sampled by its own PID, excluding
+the test wrapper and private compositor.
+
+All runs use seed **659966 (`0xa11fe`)**, **2560 × 1440**, 600 presented frames
+and 599 GPU timestamp samples, with no validation layer. Stationary freezes the
+fresh village approach at day fraction `.36`. Tour advances 600 simulated
+seconds with fixed-step movement and switches camera halfway through. Life
+loads the verified three-year save at the rented door and displays the paused
+life panel.
+
+| Metric | Stationary | Moving tour | Three-year life panel |
+| --- | ---: | ---: | ---: |
+| Terrain generation | 36.306 ms | 39.693 ms | 39.358 ms |
+| Village/life initialization | 25.476 ms | 29.688 ms | 26.008 ms |
+| Main entry → first successful present | 265.091 ms | 289.960 ms | 279.969 ms |
+| Main-thread CPU/frame | 10.1486 ms | 9.7566 ms | 11.9730 ms |
+| Frame work wall time | 10.2846 ms | 9.8990 ms | 12.1624 ms |
+| GPU command interval | 0.0953 ms | 0.0815 ms | 0.0817 ms |
+| CPU-equivalent FPS (`1000 / CPU ms`) | 98.54 | 102.49 | 83.52 |
+| RSS sampled after two-second warmup | 129,760–129,816 KiB | 129,528–129,584 KiB | 116,868–129,652 KiB |
+| NVIDIA process graphics memory | 59 MiB | 59 MiB | 59 MiB |
+
+The logical render grid remains **240 × 135 (32,400 cells)**. The generated
+region is **8,192 × 8,192 m (67.108864 km²)**. A fresh fine-lattice peak scan
+finds **1,040.75 m world Y**, or **960.75 m above the Y=80 m sea datum**.
+
+CPU-equivalent FPS is `1000 / main-thread CPU milliseconds`, **not measured
+uncapped presentation FPS**. The application retains its 60 Hz work cap and
+FIFO presentation. GPU measurements cover game commands; startup begins at
+game main entry and ends at first successful present. Neither includes physical
+scanout, and this private-display test does not characterize desktop latency.
+CPU excludes driver worker threads. Other user applications remained running.
+Raw logs: `artifacts/m6-1440-{static,tour,life}.log`, `artifacts/m6-{world,size,bundle,bundle-runtime}.log`.
+
+### Validation and scope
+
+- **59/59 tests pass in Debug and ReleaseSmall.** Physical work, payment and
+  provisioning conservation, eligibility, season/calendar aging, child-to-adult
+  household trade, safe-home boundaries, unmet-needs interruption and uneven
+  advancement partitions are covered.
+- Three persistence tests cover byte-exact regeneration of interrupted routes,
+  learned journal state, continuation after three lived years, and rejection
+  of truncated, incompatible and forged data with unchanged live state.
+- `scripts/verify_m6.py` passes three-year life scenarios across seeds 659966,
+  1, 2, 3 and 42. The default player reaches age eighteen, 6,484 paid work hours,
+  field practice 540, employer trust 100, 11,897 coins and no food shortage,
+  while paying 1,081 rent coins. Whole three-year state equals a one-year save
+  followed by two loaded years byte-for-byte; load/resave also matches.
+- M3/M4/M5 six-seed 28-day headless regression suites pass. Private native 1440p
+  captures under Vulkan validation cover repeated settled life, winter, three
+  years, learned journal and rented home. Repeated panels are byte-identical;
+  life and journal readbacks were visually inspected.
+- Background client failure, SIGTERM and timeout cleanup were exercised without
+  a desktop fallback. Live keyboard/fullscreen interaction is not claimed by
+  these headless tests. The new control paths were inspected and the simulation
+  actions exercised through the same clock and dialogue APIs.
+
+The slice proves paid work, meals, a room, earned friendship, seasons, basic
+aging and compact persistence across multiple years. Romance, new household
+formation, births, migration, death/reanimation and full generational behavior
+remain later milestones. Home life abstracts player commuting at coarse clock
+steps; the employer still follows physical schedules. The M5 flock can decline
+to zero without replenishment. See [LIFE.md](LIFE.md).

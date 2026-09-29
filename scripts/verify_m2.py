@@ -2,7 +2,8 @@
 """Milestone 2 deterministic geography and native capture checks.
 
 The headless report suite runs without a display. Full mode also requires the
-documented Wayland/Vulkan desktop and captures the atlas and landscape at 1440p.
+installed private KWin virtual display and Vulkan driver; captures run at 1440p
+without opening windows on the user desktop.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import pathlib
 import re
 import subprocess
 import sys
+
+import background
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -105,7 +108,7 @@ def capture(binary: pathlib.Path, name: str, *arguments: str) -> bytes:
         layers.append("VK_LAYER_KHRONOS_validation")
     env["VK_INSTANCE_LAYERS"] = ":".join(layers)
 
-    result = subprocess.run(command, cwd="/tmp", env=env, capture_output=True, text=True, timeout=180)
+    result = background.run(command, cwd="/tmp", env=env, text=True, timeout=180)
     log_text = result.stdout + result.stderr
     (OUTPUT / f"{name}.log").write_text(log_text)
     if result.returncode != 0:

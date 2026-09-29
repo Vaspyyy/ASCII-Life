@@ -23,6 +23,7 @@ const tree_view_depth: f32 = 1500.0;
 const Material = enum { water, shore, grass, rock, snow };
 
 const Sky = struct {
+    season: u2 = 0,
     horizon_y: f32,
     horizon_color: u32,
     zenith_color: u32,
@@ -73,7 +74,8 @@ fn fillScene(cells: []scene.Cell, terrain: *const Terrain, view: View, time_of_d
 
     const time = if (std.math.isFinite(time_of_day)) @mod(time_of_day, 1.0) else 0.36;
     const animation = if (std.math.isFinite(animation_seconds)) animation_seconds else 0;
-    const sky = makeSky(time, view);
+    var sky = makeSky(time, view);
+    if (sim) |state| sky.season = @intCast((state.day() / 90) % 4);
     paintSky(cells, sky, animation);
 
     // One compact depth plane lets trees and the third-person avatar disappear
@@ -326,8 +328,14 @@ fn paintTerrain(
                                 .field => {
                                     const row_crop = @mod(@floor(world_x * 0.7), 3) == 0;
                                     cell.background = shadeTreeColor(scene.rgb(84, 70, 38), sky, 0.9 * light);
-                                    cell.foreground = shadeTreeColor(scene.rgb(158, 153, 65), sky, light);
-                                    cell.glyph = if (row_crop) '"' else ',';
+                                    const crop_color = switch (sky.season) {
+                                        0 => scene.rgb(116, 160, 67),
+                                        1 => scene.rgb(194, 181, 83),
+                                        2 => scene.rgb(183, 126, 54),
+                                        3 => scene.rgb(118, 102, 82),
+                                    };
+                                    cell.foreground = shadeTreeColor(crop_color, sky, light);
+                                    cell.glyph = if (sky.season == 3) (if (row_crop) ':' else '.') else if (row_crop) '"' else ',';
                                 },
                                 .none => {},
                             }
@@ -582,8 +590,19 @@ fn drawTree(cells: []scene.Cell, depth_buffer: []f32, view: View, sky: Sky, tree
     const projected_span = @max(0.001, base_y - top_y);
     const canopy_end: f32 = if (tree.kind == 0) 0.80 else 0.74;
     const tree_tint = tree.tint & 0x00ff_ffff;
-    const leaves = shadeTreeColor(mixColor(if (tree.kind == 0) scene.rgb(25, 59, 47) else scene.rgb(35, 75, 52), tree_tint, 0.37), sky, if (sky.night) 0.38 else 0.78);
-    const leaf_light = shadeTreeColor(mixColor(leaves, if (tree.kind == 0) scene.rgb(133, 170, 113) else scene.rgb(153, 177, 112), 0.34), sky, if (sky.night) 0.54 else 0.98);
+    const broadleaf_color = switch (sky.season) {
+        0 => scene.rgb(35, 75, 52),
+        1 => scene.rgb(30, 68, 44),
+        2 => scene.rgb(132, 78, 32),
+        3 => scene.rgb(73, 55, 43),
+    };
+    const broadleaf_light = switch (sky.season) {
+        0, 1 => scene.rgb(153, 177, 112),
+        2 => scene.rgb(219, 160, 61),
+        3 => scene.rgb(143, 103, 68),
+    };
+    const leaves = shadeTreeColor(mixColor(if (tree.kind == 0) scene.rgb(25, 59, 47) else broadleaf_color, tree_tint, if (sky.season == 3 and tree.kind != 0) 0 else 0.37), sky, if (sky.night) 0.38 else 0.78);
+    const leaf_light = shadeTreeColor(mixColor(leaves, if (tree.kind == 0) scene.rgb(133, 170, 113) else broadleaf_light, 0.34), sky, if (sky.night) 0.54 else 0.98);
     const fog = smooth(420.0, max_view_depth, forward) * 0.85;
     const leaf_bg = mixColor(leaves, sky.fog_color, fog);
     const leaf_fg = mixColor(leaf_light, sky.horizon_color, fog * 0.50);
@@ -623,6 +642,12 @@ fn drawTree(cells: []scene.Cell, depth_buffer: []f32, view: View, sky: Sky, tree
                 const detail = hash2(@intCast(sx), @intCast(sy)) +% @as(u32, @bitCast(time_tick));
                 if (tree.kind == 0) {
                     glyph = if (detail % 5 == 0) '^' else if (detail % 3 == 0) '/' else '\\';
+                } else if (sky.season == 3) {
+                    // The same crown becomes visible branches; no new tree
+                    // identities or generated terrain enter a seasonal change.
+                    const branch = @abs(horizontal) / @max(1, projected_radius);
+                    if (@abs(horizontal) > 0.6 and @abs(@mod(vertical * 4 + branch, 1.0) - 0.5) > 0.12) continue;
+                    glyph = if (@abs(horizontal) <= 0.6) '|' else if (horizontal < 0) '/' else '\\';
                 } else {
                     glyph = switch (detail % 6) {
                         0, 1 => '*',

@@ -215,6 +215,12 @@ Choose a minimal coherent subset:
 
 A player can spend multiple simulated years in the village without joining an adventurers' guild and still experience meaningful change.
 
+Implemented slice: paid farm work, provisioning, rented housing, earned friendship,
+calendar/seasons, home-gated routines, basic aging and compact save/load. Three-year
+scenarios across five seeds preserve food/home and grow age, practice and trust;
+serialized continuation matches uninterrupted state byte-for-byte. See [LIFE.md](LIFE.md).
+Romance, new household formation and deeper generational events remain later work.
+
 ## Milestone 7: Death and the soul
 
 ### Goal

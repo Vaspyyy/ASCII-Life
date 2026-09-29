@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 5 adds sheep, hungry predators, household responses and voluntary protection to the living village. Ask residents about livestock, read a notice at the well, and help at the pen; outcomes affect provisions, memories and trust.
+Milestone 6 adds paid farm work, meals, rented housing, earned friendships, seasons, aging and saves. Establish a stable home and live through years of ordinary village life while the existing economy, residents and livestock problems continue.
 
 See:
 
@@ -209,7 +209,7 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 5 problems, not quests.**
+**Pre-alpha / Milestone 6: A life.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
@@ -218,4 +218,4 @@ Arrive on a path outside a generated rural village. Homes, cultivated plots and 
 
 Generation and inspection tools: [docs/WORLDGEN.md](docs/WORLDGEN.md).
 
-Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation and social state: [docs/PEOPLE.md](docs/PEOPLE.md). Livestock protection: [docs/PROBLEMS.md](docs/PROBLEMS.md). Combat, generational events and save files remain future work.
+Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation and social state: [docs/PEOPLE.md](docs/PEOPLE.md). Livestock protection: [docs/PROBLEMS.md](docs/PROBLEMS.md). Ordinary life and saves: [docs/LIFE.md](docs/LIFE.md). Combat and deeper generational events remain future work.
