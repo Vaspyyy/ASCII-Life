@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 4 adds people with relationships, beliefs and memories to the starting village. Talk to residents and record what they actually tell you in your journal.
+Milestone 5 adds sheep, hungry predators, household responses and voluntary protection to the living village. Ask residents about livestock, read a notice at the well, and help at the pen; outcomes affect provisions, memories and trust.
 
 See:
 
@@ -209,7 +209,7 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 4 people.**
+**Pre-alpha / Milestone 5 problems, not quests.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
@@ -218,4 +218,4 @@ Arrive on a path outside a generated rural village. Homes, cultivated plots and 
 
 Generation and inspection tools: [docs/WORLDGEN.md](docs/WORLDGEN.md).
 
-Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation and social state: [docs/PEOPLE.md](docs/PEOPLE.md). Combat, generational events and save files remain future work.
+Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation and social state: [docs/PEOPLE.md](docs/PEOPLE.md). Livestock protection: [docs/PROBLEMS.md](docs/PROBLEMS.md). Combat, generational events and save files remain future work.

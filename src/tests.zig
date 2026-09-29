@@ -12,5 +12,6 @@ test {
     _ = @import("people.zig");
     _ = @import("dialogue.zig");
     _ = @import("world_clock.zig");
+    _ = @import("ecology.zig");
     _ = @import("landscape.zig");
 }

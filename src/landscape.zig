@@ -4,6 +4,7 @@ const terrain_mod = @import("terrain.zig");
 const camera_mod = @import("camera.zig");
 const Village = @import("village.zig").Village;
 const Sim = @import("village_sim.zig").Sim;
+const Ecology = @import("ecology.zig").Ecology;
 const village_render = @import("village_render.zig");
 
 const Terrain = terrain_mod.Terrain;
@@ -56,14 +57,18 @@ pub fn fill(
     animation_seconds: f32,
     show_hud: bool,
 ) void {
-    fillScene(cells, terrain, view, time_of_day, animation_seconds, show_hud, null, null);
+    fillScene(cells, terrain, view, time_of_day, animation_seconds, show_hud, null, null, null);
 }
 
 pub fn fillVillage(cells: []scene.Cell, terrain: *const Terrain, view: View, time: f32, animation: f32, hud: bool, village: *const Village, sim: *const Sim) void {
-    fillScene(cells, terrain, view, time, animation, hud, village, sim);
+    fillScene(cells, terrain, view, time, animation, hud, village, sim, null);
 }
 
-fn fillScene(cells: []scene.Cell, terrain: *const Terrain, view: View, time_of_day: f32, animation_seconds: f32, show_hud: bool, village: ?*const Village, sim: ?*const Sim) void {
+pub fn fillVillageWithEcology(cells: []scene.Cell, terrain: *const Terrain, view: View, time: f32, animation: f32, hud: bool, village: *const Village, sim: *const Sim, ecology: *const Ecology) void {
+    fillScene(cells, terrain, view, time, animation, hud, village, sim, ecology);
+}
+
+fn fillScene(cells: []scene.Cell, terrain: *const Terrain, view: View, time_of_day: f32, animation_seconds: f32, show_hud: bool, village: ?*const Village, sim: ?*const Sim, ecology: ?*const Ecology) void {
     std.debug.assert(cells.len == scene.cols * scene.rows);
 
     const time = if (std.math.isFinite(time_of_day)) @mod(time_of_day, 1.0) else 0.36;
@@ -78,6 +83,7 @@ fn fillScene(cells: []scene.Cell, terrain: *const Terrain, view: View, time_of_d
     paintTerrain(cells, &depth_buffer, terrain, view, sky, animation, village);
     paintTrees(cells, &depth_buffer, terrain, view, sky, animation, village);
     if (village) |v| village_render.paint(cells, &depth_buffer, v, sim.?, view, time);
+    if (village) |v| if (ecology) |state| village_render.paintEcology(cells, &depth_buffer, v, view, time, state);
     if (view.third_person) paintExplorer(cells, &depth_buffer, terrain, view, sky);
     if (show_hud) paintHud(cells, time, sim);
 }

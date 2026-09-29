@@ -38,6 +38,8 @@ The default xdg-shell XML location is `/usr/share/wayland-protocols/stable/xdg-s
 - **H:** hide/show the compact control labels.
 - **F11:** toggle fullscreen (also exercises compositor resize and swapchain recreation).
 - **F:** speak with a nearby visible villager. Type a phrase and press **Enter**; **Backspace** edits it. **Escape** leaves the conversation.
+- **G:** hold beside the livestock pen to repair its fence and guard the animals while time continues.
+- **F near the well:** read a posted household notice when no resident is targeted.
 - **J:** open the learned-information journal; **N/P** page through it; **J/Escape** closes it. Conversation and journal reading pause world time.
 - **Escape:** close the game when no conversation or journal is open.
 - Keyboard press/release and pointer events are counted in `--metrics` output.
@@ -113,3 +115,7 @@ See [PEOPLE.md](PEOPLE.md) for the supported grammar and social rules. `--people
 python3 scripts/verify_m4.py --headless-only
 python3 scripts/verify_m4.py
 ```
+
+## Livestock and simulation needs
+
+See [PROBLEMS.md](PROBLEMS.md) for Milestone 5 gameplay and limits. Ask `ask about livestock`, `ask about wolves` or `help`. An informed resident can direct you to the pen. The household acts and predators can attack without player involvement; actual work and protection affect food, memories and trust. `--ecology-report` validates this state headlessly. `--pen-view` and `--elapsed-days N` support native inspection, while `--work-seconds N` exercises physical pen work for QA. Run `python3 scripts/verify_m5.py` for six-seed and native 1440p checks.

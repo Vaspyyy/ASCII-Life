@@ -2,6 +2,7 @@ const std = @import("std");
 const scene = @import("scene.zig");
 const people = @import("people.zig");
 const sim_mod = @import("village_sim.zig");
+const ecology_mod = @import("ecology.zig");
 
 pub const input_capacity = 96;
 pub const reply_capacity = 192;
@@ -42,6 +43,7 @@ pub fn parseIntent(input: []const u8) Intent {
     if (oneOf(phrase, &.{ "goodbye", "bye", "see you", "farewell" })) return .goodbye;
     if (oneOf(phrase, &.{ "you fool", "you are a fool", "you are rude", "i hate you", "shut up" })) return .insult;
     if (oneOf(phrase, &.{ "help", "can i help", "can i help you", "do you need help", "i can help", "let me help", "need any help" })) return .offer_help;
+    if (oneOf(phrase, &.{ "livestock", "wolves", "sheep" })) return .ask_about;
     if (std.mem.startsWith(u8, phraseSlice(&phrase), "ask about ") and topicIntent(input, "ask about ")) return .ask_about;
     if (std.mem.startsWith(u8, phraseSlice(&phrase), "tell me about ") and topicIntent(input, "tell me about ")) return .ask_about;
     return .unknown;
@@ -127,7 +129,7 @@ pub const JournalEntry = struct {
     learned_day: u32 = 0,
 };
 
-pub const JournalProvenance = enum(u8) { direct_disclosure, witnessed, told, inferred };
+pub const JournalProvenance = enum(u8) { direct_disclosure, witnessed, told, inferred, notice, read_notice };
 
 /// Session-bounded conversation and learned-information state. It owns no
 /// generated simulation facts: Social supplies every factual disclosure.
@@ -202,6 +204,24 @@ pub const Dialogue = struct {
         self.journal_open = !self.journal_open;
     }
 
+    /// Reading a physical public notice is a disclosure, not a conversation
+    /// with an absent resident or permission to perform work on their behalf.
+    pub fn openNotice(self: *Dialogue, ecology: *const ecology_mod.Ecology, social: *const people.Social, sim: *const sim_mod.Sim) void {
+        const knowledge = ecology.noticeKnowledge() orelse return;
+        const owner = social.person(knowledge.subject_id) orelse return;
+        const day: u32 = @intCast(@min(sim.day(), std.math.maxInt(u32)));
+        var text: [reply_capacity]u8 = undefined;
+        const posted_day = knowledge.observed_at / sim_mod.seconds_per_day + 1;
+        const fact = std.fmt.bufPrint(&text, "Posted day {d}: Wolves threaten my sheep. {d} remain; {d} lost. Help protecting the pen is welcome. Signed {s}.", .{ posted_day, knowledge.evidence_count, knowledge.evidence_losses, owner.nameSlice() }) catch return;
+        self.recordLearnedWithContext(knowledge.subject_id, "Public notice", fact, day, .read_notice, knowledge.subject_id, owner.nameSlice());
+        self.learnName(knowledge.subject_id, owner.nameSlice());
+        const guidance = std.fmt.bufPrint(&text, "The pen is {s} of the well, beside the field. Ask {s} 'help' to volunteer; then close the panel and hold G at the pen to repair and guard it.", .{ penDirection(ecology), owner.nameSlice() }) catch return;
+        self.recordLearnedWithContext(knowledge.subject_id, "Public notice", guidance, day, .read_notice, knowledge.subject_id, owner.nameSlice());
+        self.close();
+        self.journal_open = true;
+        self.journal_offset = ((self.journal_count -| 2) / journal_page_size) * journal_page_size;
+    }
+
     /// Move through the bounded journal three entries at a time. `delta` is
     /// normally +1 for N and -1 for P.
     pub fn pageJournal(self: *Dialogue, delta: i32) void {
@@ -216,8 +236,21 @@ pub const Dialogue = struct {
         self.submitText(self.input[0..self.input_len], social, sim);
     }
 
+    pub fn submitWithEcology(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, ecology: *ecology_mod.Ecology) void {
+        if (!self.active or self.journal_open) return;
+        self.submitTextWithEcology(self.input[0..self.input_len], social, sim, ecology);
+    }
+
     /// QA and scripted callers can submit the same text path as keyboard input.
     pub fn submitText(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim) void {
+        self.submitCommon(line, social, sim, null);
+    }
+
+    pub fn submitTextWithEcology(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: *ecology_mod.Ecology) void {
+        self.submitCommon(line, social, sim, ecology);
+    }
+
+    fn submitCommon(self: *Dialogue, line: []const u8, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology) void {
         if (!self.active or self.journal_open) return;
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) return;
@@ -225,16 +258,16 @@ pub const Dialogue = struct {
         self.ask_topic_len = 0;
         self.ask_topic[0] = 0;
         if (self.last_intent == .ask_about) {
-            const topic = topicText(trimmed, "ask about ", "tell me about ");
+            const topic = if (asciiStartsWithIgnoreCase(trimmed, "ask about ") or asciiStartsWithIgnoreCase(trimmed, "tell me about ")) topicText(trimmed, "ask about ", "tell me about ") else trimEdgeMarks(trimmed);
             self.ask_topic_len = @intCast(copyLowerBounded(&self.ask_topic, topic));
         }
-        self.respond(social, sim);
+        self.respond(social, sim, ecology);
         self.rememberTurn(trimmed);
         self.input_len = 0;
         self.input[0] = 0;
     }
 
-    fn respond(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim) void {
+    fn respond(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, ecology: ?*ecology_mod.Ecology) void {
         const id: u8 = @intCast(self.speaker_id);
         const person_value = social.person(id) orelse {
             self.setReply("I don't understand. Try hello, name, work, family, news, plans, help, ask about supplies, or goodbye.");
@@ -277,6 +310,14 @@ pub const Dialogue = struct {
                 self.active = false;
             },
             .offer_help => {
+                if (ecology) |state| {
+                    const knowledge = social.knowledgeAbout(id, .livestock);
+                    if (knowledge != null and social.canDisclose(id, knowledge.?.privacy) and state.volunteer(id)) {
+                        self.setReplyFmt("You can help protect the sheep. The pen is {s} of the well, beside the field. Close this panel and hold G at the pen to repair and guard it.", .{penDirection(state)});
+                        self.recordReply(social, sim, .direct_disclosure, 0);
+                        return;
+                    }
+                }
                 self.setReplyFmt("I work as {s}. You can ask how work is going.", .{jobName(person_value.job)});
                 self.recordReply(social, sim, .direct_disclosure, 0);
             },
@@ -333,10 +374,10 @@ pub const Dialogue = struct {
 
     fn answerNews(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, id: u8) void {
         var newest: ?people.Knowledge = null;
-        for ([_]people.Topic{ .food_reserves, .harvest, .work }) |topic| {
+        for ([_]people.Topic{ .food_reserves, .harvest, .work, .livestock }) |topic| {
             const knowledge = social.knowledgeAbout(id, topic) orelse continue;
             if (!social.canDisclose(id, knowledge.privacy)) continue;
-            if (newest == null or knowledge.observed_at > newest.?.observed_at) newest = knowledge;
+            if (newest == null or knowledge.observed_at > newest.?.observed_at or (topic == .livestock and knowledge.observed_at == newest.?.observed_at)) newest = knowledge;
         }
         if (newest) |knowledge| {
             self.answerKnowledge(social, sim, knowledge);
@@ -353,6 +394,8 @@ pub const Dialogue = struct {
             .harvest
         else if (topicMatches(topic_name, &.{ "work", "jobs", "workplaces" }))
             .work
+        else if (topicMatches(topic_name, &.{ "livestock", "wolves", "sheep", "animals", "pen" }))
+            .livestock
         else
             null;
         const selected = topic orelse {
@@ -371,6 +414,7 @@ pub const Dialogue = struct {
     }
 
     fn answerKnowledge(self: *Dialogue, social: *people.Social, sim: *sim_mod.Sim, knowledge: people.Knowledge) void {
+        self.setReply("I don't know enough about that to answer.");
         const stale = sim.elapsed_seconds -| knowledge.observed_at >= sim_mod.seconds_per_day;
         var opening_buffer: [64]u8 = undefined;
         const opening = knowledgeOpening(&opening_buffer, social, knowledge, stale);
@@ -394,11 +438,22 @@ pub const Dialogue = struct {
                 .work_sparse => self.setReplyFmt("{s}there {s}much work around the village lately.", .{ opening, if (stale) "wasn't " else "hasn't been " }),
                 else => return,
             },
+            .livestock => switch (knowledge.belief) {
+                .livestock_taken => self.setReplyFmt("{s}wolves took sheep. At that time {d} remained, with {d} lost in all.", .{ opening, knowledge.evidence_count, knowledge.evidence_losses }),
+                .livestock_threatened => self.setReplyFmt("{s}wolves threatened the sheep pen. At that time {d} sheep remained; protection was needed.", .{ opening, knowledge.evidence_count }),
+                .livestock_protected => self.setReplyFmt("{s}the sheep pen was protected. At that time {d} sheep remained, with {d} lost in all.", .{ opening, knowledge.evidence_count, knowledge.evidence_losses }),
+                .livestock_lost_all => self.setReplyFmt("{s}the household had lost all its sheep, {d} in all.", .{ opening, knowledge.evidence_losses }),
+                else => {
+                    self.setReply("I don't know enough about that to answer.");
+                    return;
+                },
+            },
         }
         const provenance: JournalProvenance = switch (knowledge.provenance) {
             .witnessed => .witnessed,
             .told => .told,
             .inferred => .inferred,
+            .notice => .notice,
         };
         self.recordReply(social, sim, provenance, knowledge.source_id);
     }
@@ -408,8 +463,8 @@ pub const Dialogue = struct {
         const name = if (self.speaker_name_known) self.currentSpeakerName() else "Villager";
         const day: u32 = @intCast(@min(sim.day(), std.math.maxInt(u32)));
         if (social.person(id) == null) return;
-        const source_id = if (provenance == .told) underlying_source_id else id;
-        const underlying_name = if (provenance == .told) blk: {
+        const source_id = if (provenance == .told or provenance == .notice) underlying_source_id else id;
+        const underlying_name = if (provenance == .told or provenance == .notice) blk: {
             const source = social.person(source_id) orelse break :blk "";
             break :blk source.nameSlice();
         } else "";
@@ -534,6 +589,8 @@ pub const Dialogue = struct {
                 .witnessed => " told you from direct observation: ",
                 .told => if (entry.underlying_source_name_len != 0) " told you they heard from " else " passed on what they heard: ",
                 .inferred => " suspects: ",
+                .notice => " disclosed a posted notice: ",
+                .read_notice => " states: ",
             };
             const content = if (entry.provenance == .told and entry.underlying_source_name_len != 0)
                 std.fmt.bufPrint(&line, "Day {d}: {s}{s}{s}: {s}", .{ @as(u64, entry.learned_day) + 1, source, attribution, entry.underlying_source_name[0..entry.underlying_source_name_len], entry.text[0..entry.text_len] }) catch continue
@@ -714,11 +771,25 @@ fn knowledgeOpening(buffer: []u8, social: *const people.Social, knowledge: peopl
     return switch (knowledge.provenance) {
         .witnessed => if (stale) "At my last look, " else "",
         .inferred => if (stale) "At my last count, I suspect that " else "I suspect that ",
+        .notice => if (social.person(knowledge.source_id)) |source|
+            std.fmt.bufPrint(buffer, "I read {s}'s notice saying that ", .{source.nameSlice()}) catch "I read a notice saying that "
+        else
+            "I read a notice saying that ",
         .told => if (social.person(knowledge.source_id)) |source| blk: {
             if (stale) break :blk std.fmt.bufPrint(buffer, "The last I heard from {s}, ", .{source.nameSlice()}) catch "The last I heard, ";
             break :blk std.fmt.bufPrint(buffer, "I heard from {s} that ", .{source.nameSlice()}) catch "I heard that ";
         } else if (stale) "The last I heard, " else "I heard that ",
     };
+}
+
+/// The established village coordinate convention is +X east and -Z north.
+fn penDirection(ecology: *const ecology_mod.Ecology) []const u8 {
+    const dx = ecology.pen.x - ecology.well.x;
+    const dz = ecology.pen.z - ecology.well.z;
+    if (@abs(dx) > @abs(dz) * 2) return if (dx >= 0) "east" else "west";
+    if (@abs(dz) > @abs(dx) * 2) return if (dz >= 0) "south" else "north";
+    if (dz >= 0) return if (dx >= 0) "southeast" else "southwest";
+    return if (dx >= 0) "northeast" else "northwest";
 }
 
 fn jobName(job: sim_mod.Job) []const u8 {
@@ -961,4 +1032,140 @@ test "journal paging is clamped and a full input keeps its caret visible" {
     const bounds = panelBounds();
     const prompt_y = bounds.y + bounds.height - 2;
     try std.testing.expectEqual(@as(u32, '_'), cells[prompt_y * scene.cols + bounds.x + bounds.width - 3].glyph);
+}
+
+fn testLivestockKnowledge(provenance: people.Provenance) people.Knowledge {
+    return .{
+        .topic = .livestock,
+        .belief = .livestock_taken,
+        .provenance = provenance,
+        .confidence = 70,
+        .source_id = 1,
+        .witness_id = 1,
+        .subject_id = 0,
+        .event_id = 12,
+        .observed_at = 0,
+        .evidence_count = 5,
+        .evidence_losses = 1,
+        .privacy = .public,
+    };
+}
+
+test "livestock rumor reports the speaker's dated evidence and immediate source" {
+    var fixture = testFixture();
+    fixture.social.persons[0].knowledge[0] = testLivestockKnowledge(.told);
+    fixture.social.persons[0].knowledge_count = 1;
+    fixture.sim.elapsed_seconds = sim_mod.seconds_per_day * 2;
+    var dialogue = Dialogue{};
+    dialogue.open(0, &fixture.social, &fixture.sim);
+    dialogue.submitText("wolves", &fixture.social, &fixture.sim);
+    const reply = dialogue.reply[0..dialogue.reply_len];
+    try std.testing.expect(std.mem.indexOf(u8, reply, "last I heard from Finn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, reply, "5 remained") != null);
+    try std.testing.expect(std.mem.indexOf(u8, reply, "1 lost") != null);
+    try std.testing.expectEqual(@as(u32, 2), dialogue.journal[0].learned_day);
+    try std.testing.expectEqual(JournalProvenance.told, dialogue.journal[0].provenance);
+    try std.testing.expectEqual(@as(u8, 1), dialogue.journal[0].underlying_source_id);
+}
+
+test "unknown and withheld livestock knowledge create no learned facts" {
+    var fixture = testFixture();
+    var dialogue = Dialogue{};
+    dialogue.open(0, &fixture.social, &fixture.sim);
+    dialogue.submitText("ask about livestock", &fixture.social, &fixture.sim);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.journal_count);
+    fixture.social.persons[0].knowledge[0] = testLivestockKnowledge(.witnessed);
+    fixture.social.persons[0].knowledge[0].privacy = .private;
+    fixture.social.persons[0].knowledge_count = 1;
+    dialogue.submitText("wolves", &fixture.social, &fixture.sim);
+    try std.testing.expectEqualStrings("I can't share that with you yet.", dialogue.reply[0..dialogue.reply_len]);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.journal_count);
+    dialogue.submitText("news", &fixture.social, &fixture.sim);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.journal_count);
+    dialogue.submitText("ask about the wolf pack's coordinates", &fixture.social, &fixture.sim);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.journal_count);
+}
+
+test "an invalid topic belief pair never repeats a previous factual answer" {
+    var fixture = testFixture();
+    fixture.social.persons[0].knowledge[0] = testLivestockKnowledge(.witnessed);
+    fixture.social.persons[0].knowledge[0].belief = .well_stocked;
+    fixture.social.persons[0].knowledge_count = 1;
+    var dialogue = Dialogue{};
+    dialogue.open(0, &fixture.social, &fixture.sim);
+    dialogue.submitText("work", &fixture.social, &fixture.sim);
+    const learned_before = dialogue.journal_count;
+    dialogue.submitText("ask about livestock", &fixture.social, &fixture.sim);
+    try std.testing.expectEqualStrings("I don't know enough about that to answer.", dialogue.reply[0..dialogue.reply_len]);
+    try std.testing.expectEqual(learned_before, dialogue.journal_count);
+}
+
+test "help enables local labor only through informed disclosure and grants no trust" {
+    var fixture = testFixture();
+    var ecology = ecology_mod.Ecology{
+        .owner_id = 0,
+        .animals = 5,
+        .initial_animals = 6,
+        .losses = 1,
+        .attacks = 1,
+        .notice = true,
+        .pen = .{ .x = 20, .z = -20 },
+    };
+    var dialogue = Dialogue{};
+    dialogue.open(0, &fixture.social, &fixture.sim);
+    dialogue.submitTextWithEcology("help", &fixture.social, &fixture.sim, &ecology);
+    try std.testing.expect(!ecology.player_volunteered);
+    fixture.social.persons[0].knowledge[0] = testLivestockKnowledge(.witnessed);
+    fixture.social.persons[0].knowledge_count = 1;
+    fixture.social.persons[0].knowledge[0].privacy = .private;
+    dialogue.submitTextWithEcology("help", &fixture.social, &fixture.sim, &ecology);
+    try std.testing.expect(!ecology.player_volunteered);
+    fixture.social.persons[0].knowledge[0].privacy = .public;
+    dialogue.submitTextWithEcology("help", &fixture.social, &fixture.sim, &ecology);
+    try std.testing.expect(ecology.player_volunteered);
+    try std.testing.expect(std.mem.indexOf(u8, dialogue.reply[0..dialogue.reply_len], "hold G at the pen") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dialogue.reply[0..dialogue.reply_len], "northeast of the well") != null);
+    try std.testing.expectEqual(@as(i8, 0), fixture.social.trust(0));
+    try std.testing.expectEqual(@as(u16, 0), fixture.social.persons[0].player.meaningful_actions);
+    try std.testing.expectEqual(@as(u32, 0), ecology.repaired);
+    try std.testing.expectEqual(@as(u8, 5), ecology.animals);
+}
+
+test "reading a published notice learns only its snapshot and never invents a conversation" {
+    var fixture = testFixture();
+    fixture.sim.elapsed_seconds = sim_mod.seconds_per_day * 3;
+    var ecology = ecology_mod.Ecology{
+        .owner_id = 0,
+        .animals = 2,
+        .losses = 4,
+        .notice = false,
+        .pen = .{ .x = -30, .z = 0 },
+    };
+    var posted = testLivestockKnowledge(.notice);
+    posted.belief = .livestock_threatened;
+    posted.observed_at = sim_mod.seconds_per_day;
+    ecology.posted_knowledge = posted;
+    var dialogue = Dialogue{};
+    dialogue.openNotice(&ecology, &fixture.social, &fixture.sim);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.journal_count);
+    try std.testing.expect(!dialogue.journal_open);
+    const social_before = fixture.social.fingerprint();
+    ecology.notice = true;
+    dialogue.openNotice(&ecology, &fixture.social, &fixture.sim);
+    try std.testing.expect(dialogue.journal_open);
+    try std.testing.expect(!dialogue.active);
+    try std.testing.expectEqual(@as(usize, 0), dialogue.history_count);
+    try std.testing.expectEqual(social_before, fixture.social.fingerprint());
+    try std.testing.expect(!ecology.player_volunteered);
+    try std.testing.expectEqual(@as(usize, 2), dialogue.journal_count);
+    const entry = dialogue.journal[0];
+    try std.testing.expectEqual(JournalProvenance.read_notice, entry.provenance);
+    try std.testing.expectEqualStrings("Public notice", entry.source_name[0..entry.source_name_len]);
+    try std.testing.expectEqual(@as(u32, 3), entry.learned_day);
+    try std.testing.expect(std.mem.indexOf(u8, entry.text[0..entry.text_len], "Posted day 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, entry.text[0..entry.text_len], "5 remain; 1 lost") != null);
+    try std.testing.expect(std.mem.indexOf(u8, entry.text[0..entry.text_len], "Signed Mara") != null);
+    const instructions = dialogue.journal[1];
+    try std.testing.expect(std.mem.indexOf(u8, instructions.text[0..instructions.text_len], "west of the well") != null);
+    try std.testing.expect(std.mem.indexOf(u8, instructions.text[0..instructions.text_len], "Ask Mara 'help'") != null);
 }

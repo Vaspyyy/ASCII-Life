@@ -384,3 +384,44 @@ CPU-equivalent FPS is calculated main-thread capacity, not measured uncapped pre
 - Native key-event probes verified Backspace correction, Shift, spaces, Enter and the active German QWERTZ layout (`q`, physical Y, physical Z produced `qzy`). A 48-second conversation retained simulation time **31,104 seconds** and the starting viewpoint despite typing movement-key letters. Escape left conversation without closing the game; J/N/P/J and F reopened the journal/conversation correctly, then Escape closed the game from normal play. Live input was verified through the game's diagnostics; visual inspection used Vulkan readbacks because the desktop screenshot backend was unavailable.
 
 Social and journal state persist within the running session. Save files, generational events, actual player employment/contracts and further problem simulation remain later work. Saying `help` reveals public work; it does not manufacture completed help or trust. See [PEOPLE.md](PEOPLE.md) for the current rules and limits.
+
+## Milestone 5 problems, not quests — 2026-09-29
+
+Measured the M5 working tree based on `daa122d08a61eaa4f3f186867323f93a98d2c791`, Zig 0.16.0 ReleaseSmall, KDE Wayland / NVIDIA RTX 3070, driver 615.71.09. The power profile was **power-saver** before and after the runs. Source/build/shader digest under the M0 procedure: `1c3423a60cf090549eafd486af27a47bbf1abf248703db25bd2c26aa48e4765a`. Final ELF SHA-256: `889c7795eec399092e9fd17d0a4587f2e9a21653cd760cc63e107fb12c9e6b0a`.
+
+| Distribution | Exact bytes | Change from M4 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 275,496 | +22,704 |
+| ELF compressed with `xz -9` | 127,216 | +9,768 |
+| Runtime bundle payload | 4,216,953 | +18,608 |
+| Runtime bundle `.tar.xz` | 1,490,384 | +11,320 |
+
+No dependencies or external visual assets were added. The library closure is unchanged; the current host libc is 4,096 bytes smaller than the libc in the saved M4 bundle, accounting for the difference between ELF and payload deltas. The final bundle executable hash matches the measured ELF. Its loader resolves every ordinary dependency within the bundle, and it completed 120 native frames at 1440p from `/tmp`, looking at the pen. Kernel, compositor and GPU driver/ICD infrastructure remain host requirements; this is still the same-host packaging experiment.
+
+### 1440p runtime
+
+Each final run presented 600 frames at **2560 × 1440**, seed **659966 (`0xa11fe`)**, with 599 GPU timestamp samples and no validation layer. Stationary uses `--static` at the default village approach and time `.36`. Moving uses `--tour`, advancing 600 simulated seconds and switching camera halfway through. Pen uses `--static --pen-view --time .38`, showing eight sheep, damaged fencing and the nearby farmers after the first threat inspection. Packaging and compression finished before these final measurements.
+
+| Metric | Stationary | Moving tour | Pen close view |
+| --- | ---: | ---: | ---: |
+| Terrain generation | 36.674 ms | 34.877 ms | 36.656 ms |
+| Village/social/ecology initialization | 25.452 ms | 24.960 ms | 25.396 ms |
+| Main entry → first successful present | 219.984 ms | 223.258 ms | 227.286 ms |
+| Main-thread CPU/frame | 10.0935 ms | 9.3896 ms | 10.7581 ms |
+| Frame work wall time | 10.2390 ms | 9.4772 ms | 10.8104 ms |
+| GPU command interval | 0.1039 ms | 0.1063 ms | 0.0969 ms |
+| CPU-equivalent FPS (`1000 / CPU ms`) | 99.07 | 106.50 | 92.95 |
+| Steady RSS | 86,592–86,656 KiB | 86,580–86,644 KiB | 86,612–86,676 KiB |
+| NVIDIA process graphics memory | 55 MiB | 55 MiB | 55 MiB |
+
+The logical render field remains **240 × 135 (32,400 cells)**; the generated region is **8,192 × 8,192 m (67.108864 km²)**. A fresh complete height scan found peak **1,040.75 m world Y**, or **960.75 m above the Y=80 m sea datum**.
+
+CPU-equivalent FPS is arithmetic main-thread capacity, **not measured uncapped presentation FPS**. The application retains its 60 Hz work cap and FIFO presentation. CPU excludes driver worker threads; GPU command intervals and startup exclude compositor latency and physical scanout. Other desktop applications remained running. Raw logs are `artifacts/m5-1440-{static,tour,pen}.log`, `artifacts/m5-{world,size,bundle,bundle-runtime}.log`.
+
+### Validation and scope
+
+- **52/52 tests pass in Debug and ReleaseSmall.** New coverage includes predator removal and materials counterfactuals, physical guard defense and expiry, local inspection, known/unknown livestock disclosure, signed notice provenance, informed neighbor intervention, absent-owner outcome withholding, and real-clock work partition equivalence across hourly/completion boundaries. The final UI label adjustment was release-built and covered by the native captures.
+- M3 and M4 six-seed 28-day headless suites pass. M5 also validates six seeds, animal/attack/food/goods conservation, repeat reports, real repair costs and no reward for merely offering help.
+- `scripts/verify_m5.py` passes native 1440p Vulkan validation captures for repeated pen, repair, third person, livestock conversation, signed notice/journal, physical notice board, night wolves and 28-day pen state. Repeat pen pixels are byte-identical. Pen, fence damage/repair, notice panel and predator readbacks were visually inspected. The new F/G native key paths were inspected in code; they were not exercised by a live native keyboard probe this milestone. Work correctness is verified through the same simulation path using the developer harness and clock tests.
+
+This is a bounded village-scale need-driven slice, not full animal ecology or combat. NPC repair effort is a coarse hourly allocation at the field checkpoint; player labor instead runs against exact clock/completion boundaries. Outcome knowledge and earned trust wait for the owner's inspection. Session state still has no save format, breeding or long-term animal replenishment. The initial flock can decline to zero while the wider village keeps running. See [PROBLEMS.md](PROBLEMS.md) for controls and simulation limits.

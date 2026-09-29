@@ -4,6 +4,7 @@ const camera_mod = @import("camera.zig");
 const village_mod = @import("village.zig");
 const sim_mod = @import("village_sim.zig");
 const interaction = @import("interaction.zig");
+const Ecology = @import("ecology.zig").Ecology;
 
 const View = camera_mod.View;
 const Village = village_mod.Village;
@@ -20,7 +21,7 @@ const Vec3 = struct { x: f32, y: f32, z: f32 };
 const CameraPoint = struct { side: f32, forward: f32, vertical: f32 };
 const ScreenPoint = struct { x: f32, y: f32, forward: f32 };
 
-const Face = enum { plaster, timber, roof, stone, door, window, dark, iron };
+const Face = enum { plaster, timber, roof, stone, door, window, dark, iron, wool, fur, notice };
 const FaceStyle = struct {
     face: Face,
     base: u32,
@@ -84,6 +85,146 @@ pub fn paint(
         const motion_seconds: f32 = if (resident.activity == .walking) @as(f32, @floatFromInt(sim.elapsed_seconds % 60000)) / 60.0 else 0;
         drawResident(cells, depth_buffer, view, light, position.x, ground, position.z, resident.age_years, resident.appearance_seed, motion_seconds);
     }
+}
+
+/// Ecology supplies the causes: animal positions, remaining flock, fence
+/// condition and the predator's current presence. Rendering never advances it.
+pub fn paintEcology(cells: []scene.Cell, depth_buffer: []f32, village: *const Village, view: View, time_of_day: f32, ecology: *const Ecology) void {
+    if (cells.len != scene.cols * scene.rows or depth_buffer.len != cells.len) return;
+    const light = makeLight(time_of_day);
+    if (ecology.notice) {
+        for (village.buildingsSlice()) |building| {
+            if (building.kind != .well) continue;
+            const x = building.x + 3.2;
+            const z = building.z + 2.6;
+            const ground = village.surfaceY(x, z);
+            const timber = timberStyle(ecology.seed ^ 0x6e6f_7469_6365);
+            for ([_]f32{ x - 0.72, x + 0.72 }) |post_x| drawPrism(cells, depth_buffer, view, light, .{ .x = post_x - 0.06, .y = ground, .z = z - 0.07 }, 0.12, 1.95, 0.14, timber);
+            drawPrism(cells, depth_buffer, view, light, .{ .x = x - 0.87, .y = ground + 0.88, .z = z - 0.12 }, 1.74, 0.95, 0.24, timber);
+            const paper = FaceStyle{ .face = .notice, .base = color(206, 191, 143), .accent = color(63, 55, 42), .seed = ecology.seed };
+            for ([_]f32{ z - 0.132, z + 0.132 }) |paper_z| drawQuad(cells, depth_buffer, view, light, .{
+                .{ .x = x - 0.40, .y = ground + 1.05, .z = paper_z }, .{ .x = x + 0.40, .y = ground + 1.05, .z = paper_z },
+                .{ .x = x + 0.40, .y = ground + 1.70, .z = paper_z }, .{ .x = x - 0.40, .y = ground + 1.70, .z = paper_z },
+            }, .{ .x = 0, .y = 0, .z = if (paper_z < z) -1 else 1 }, paper);
+        }
+    }
+    const center = ecology.pen;
+    const pen_forward = (center.x - view.x) * @sin(view.yaw) + (center.z - view.z) * @cos(view.yaw);
+    if (pen_forward > village_draw_distance + ecology.pen_half or pen_forward < -ecology.pen_half * 2.0) return;
+
+    const half = ecology.pen_half;
+    const corners: [4]village_mod.Point = .{
+        .{ .x = center.x - half, .z = center.z - half },
+        .{ .x = center.x + half, .z = center.z - half },
+        .{ .x = center.x + half, .z = center.z + half },
+        .{ .x = center.x - half, .z = center.z + half },
+    };
+    for (corners, 0..) |a, side| {
+        const b = corners[(side + 1) % corners.len];
+        drawFenceSide(cells, depth_buffer, village, view, light, a, b, side == 0 and ecology.fence < 65, ecology.seed ^ stepSeed(side));
+    }
+    for (0..ecology.animals) |index| {
+        const position = ecology.animalPosition(@intCast(index));
+        const seed = ecology.seed ^ stepSeed(index);
+        const yaw = @as(f32, @floatFromInt(mix32(seed) % 6283)) * 0.001;
+        drawAnimal(cells, depth_buffer, view, light, .{ .x = position.x, .y = village.surfaceY(position.x, position.z), .z = position.z }, yaw, seed, false);
+    }
+    if (ecology.predatorPosition()) |position| {
+        // A low, long shape faces the pen instead of a permanent map marker.
+        const yaw = std.math.atan2(center.x - position.x, center.z - position.z);
+        drawAnimal(cells, depth_buffer, view, light, .{ .x = position.x, .y = village.surfaceY(position.x, position.z), .z = position.z }, yaw, ecology.seed ^ 0x776f_6c66, true);
+    }
+}
+
+fn drawFenceSide(cells: []scene.Cell, depth_buffer: []f32, village: *const Village, view: View, light: Light, a: village_mod.Point, b: village_mod.Point, damaged: bool, seed: u64) void {
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const length = @sqrt(dx * dx + dz * dz);
+    if (length <= 0.2) return;
+    const segments: usize = @max(2, @as(usize, @intFromFloat(@ceil(length / 2.0))));
+    const style = timberStyle(seed);
+    const yaw = std.math.atan2(dx, dz);
+    var previous: Vec3 = undefined;
+    for (0..segments + 1) |index| {
+        const t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments));
+        const x = a.x + dx * t;
+        const z = a.z + dz * t;
+        const ground = village.surfaceY(x, z);
+        const current: Vec3 = .{ .x = x, .y = ground, .z = z };
+        drawPrism(cells, depth_buffer, view, light, .{ .x = x - 0.08, .y = ground - 0.03, .z = z - 0.08 }, 0.16, 1.14, 0.16, style);
+        if (index > 0) {
+            const broken = damaged and index == segments / 2;
+            if (broken) {
+                // The same missing rail segment exposes the breach at every
+                // viewing angle; a fallen rail remains as physical evidence.
+                const midpoint: Vec3 = .{ .x = (previous.x + x) * 0.5, .y = @min(previous.y, ground) + 0.05, .z = (previous.z + z) * 0.5 + 0.18 };
+                drawRotatedPrism(cells, depth_buffer, view, light, midpoint, yaw + 0.22, .{ .x = -0.06, .y = 0, .z = -length / @as(f32, @floatFromInt(segments)) * 0.5 }, 0.12, 0.12, length / @as(f32, @floatFromInt(segments)), style);
+            } else {
+                for ([_]f32{ 0.43, 0.90 }) |height| {
+                    const normal: Vec3 = .{ .x = dz / length, .y = 0, .z = -dx / length };
+                    drawQuad(cells, depth_buffer, view, light, .{
+                        .{ .x = previous.x, .y = previous.y + height, .z = previous.z },
+                        .{ .x = x, .y = ground + height, .z = z },
+                        .{ .x = x, .y = ground + height + 0.12, .z = z },
+                        .{ .x = previous.x, .y = previous.y + height + 0.12, .z = previous.z },
+                    }, normal, style);
+                }
+            }
+        }
+        previous = current;
+    }
+}
+
+fn drawAnimal(cells: []scene.Cell, depth_buffer: []f32, view: View, light: Light, origin: Vec3, yaw: f32, seed: u64, predator: bool) void {
+    const camera = toCamera(origin, view);
+    if (camera.forward < near_plane or camera.forward > village_draw_distance or @abs(camera.side) > camera.forward * 1.45 + 2.0) return;
+    const coat = FaceStyle{
+        .face = if (predator) .fur else .wool,
+        .base = if (predator) color(78, 84, 82) else color(211, 207, 181),
+        .accent = if (predator) color(135, 142, 131) else color(254, 246, 214),
+        .seed = seed,
+    };
+    const dark = FaceStyle{ .face = .dark, .base = color(51, 46, 39), .accent = color(100, 91, 74), .seed = seed };
+    const body_length: f32 = if (predator) 1.28 else 1.08;
+    const body_width: f32 = if (predator) 0.42 else 0.62;
+    const body_height: f32 = if (predator) 0.38 else 0.48;
+    const legs_height: f32 = if (predator) 0.42 else 0.36;
+    drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = -body_width * 0.5, .y = legs_height, .z = -body_length * 0.5 }, body_width, body_height, body_length, coat);
+    for ([_]f32{ -body_width * 0.32, body_width * 0.32 }) |side| {
+        for ([_]f32{ -body_length * 0.33, body_length * 0.33 }) |along| {
+            drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = side - 0.055, .y = 0.02, .z = along - 0.055 }, 0.11, legs_height + 0.08, 0.11, dark);
+        }
+    }
+    const head_y: f32 = if (predator) legs_height + 0.23 else legs_height + 0.12;
+    drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = -0.18, .y = head_y, .z = body_length * 0.35 }, 0.36, 0.31, 0.38, if (predator) coat else dark);
+    // Ears and muzzle distinguish a grazing flock from the narrow wolf shape.
+    for ([_]f32{ -0.18, 0.18 }) |side| {
+        drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = side - 0.045, .y = head_y + 0.25, .z = body_length * 0.42 }, 0.09, if (predator) 0.18 else 0.08, 0.14, dark);
+    }
+    if (predator) {
+        drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = -0.11, .y = head_y + 0.02, .z = body_length * 0.35 + 0.30 }, 0.22, 0.16, 0.28, dark);
+        drawRotatedPrism(cells, depth_buffer, view, light, origin, yaw, .{ .x = -0.065, .y = legs_height + 0.04, .z = -body_length * 0.5 - 0.43 }, 0.13, 0.15, 0.48, coat);
+    }
+}
+
+fn animalPoint(origin: Vec3, yaw: f32, local: Vec3) Vec3 {
+    const sin = @sin(yaw);
+    const cos = @cos(yaw);
+    return .{ .x = origin.x + local.x * cos + local.z * sin, .y = origin.y + local.y, .z = origin.z - local.x * sin + local.z * cos };
+}
+
+fn drawRotatedPrism(cells: []scene.Cell, depth_buffer: []f32, view: View, light: Light, origin: Vec3, yaw: f32, local: Vec3, width: f32, height: f32, depth: f32, style: FaceStyle) void {
+    var points: [8]Vec3 = undefined;
+    for (0..8) |i| points[i] = animalPoint(origin, yaw, .{
+        .x = local.x + (if (i & 1 != 0) width else 0),
+        .y = local.y + (if (i & 2 != 0) height else 0),
+        .z = local.z + (if (i & 4 != 0) depth else 0),
+    });
+    const sin = @sin(yaw);
+    const cos = @cos(yaw);
+    const faces = [_][4]usize{ .{ 0, 1, 3, 2 }, .{ 5, 4, 6, 7 }, .{ 4, 0, 2, 6 }, .{ 1, 5, 7, 3 }, .{ 2, 3, 7, 6 } };
+    const normals = [_]Vec3{ .{ .x = -sin, .y = 0, .z = -cos }, .{ .x = sin, .y = 0, .z = cos }, .{ .x = -cos, .y = 0, .z = sin }, .{ .x = cos, .y = 0, .z = -sin }, .{ .x = 0, .y = 1, .z = 0 } };
+    for (faces, normals) |indices, normal| drawQuad(cells, depth_buffer, view, light, .{ points[indices[0]], points[indices[1]], points[indices[2]], points[indices[3]] }, normal, style);
 }
 
 fn drawBuilding(cells: []scene.Cell, depth_buffer: []f32, village: *const Village, view: View, light: Light, building: village_mod.Building, building_index: usize, time_of_day: f32) void {
@@ -634,6 +775,9 @@ fn faceGlyph(face: Face, detail: u32, x: i32, y: i32, normal: Vec3) u32 {
         .window => if (stripe % 4 == 0) '+' else if (detail % 7 == 0) '=' else ' ',
         .dark => if (detail % 4 == 0) '~' else ' ',
         .iron => if (detail % 3 == 0) '+' else '#',
+        .wool => if (detail % 4 == 0) 'o' else if (detail % 3 == 0) '%' else '#',
+        .fur => if (stripe % 3 == 0) '/' else if (detail % 4 == 0) ':' else '#',
+        .notice => if (@mod(y, 3) == 0 and detail % 5 != 0) '-' else ' ',
     };
 }
 

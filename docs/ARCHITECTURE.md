@@ -594,3 +594,7 @@ Physical settlement generation, resident simulation and architecture rendering a
 `people.zig` attaches compact social state to stable resident identities. `world_clock.zig` schedules social updates at absolute simulation-hour boundaries, including across development clock jumps. `dialogue.zig` owns the narrow intent parser, bounded transcript, learned-information journal and glyph panels. `interaction.zig` gates conversation by physical range, orientation and visibility.
 
 Wayland keyboard layout translation uses libxkbcommon inside `platform.zig`; the game consumes an ordered queue of printable ASCII/edit/submit/cancel events. Simulation and dialogue have no native library imports. Modal reading pauses the shared clock and suppresses movement hotkeys. No save format is introduced in this milestone; social state is session-resident. See [PEOPLE.md](PEOPLE.md) for behavior, limits and the measured dependency rationale.
+
+## Milestone 5 causal needs
+
+`ecology.zig` connects seeded livestock ownership, fence condition and predator hunger to hourly raids, real provisioning/losses, household responses and player protection. The economy retains explicit conservation counters for livestock and repairs. Social livestock observations carry snapshots and provenance; dialogue and public notices disclose those observations rather than querying world truth. The shared clock calls ecology before social propagation at absolute hour boundaries. Glyph geometry depicts the resulting pen, animals and predator presence. See [PROBLEMS.md](PROBLEMS.md).

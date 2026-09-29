@@ -4,10 +4,10 @@ const village_sim = @import("village_sim.zig");
 pub const max_people: usize = village_sim.max_residents;
 pub const max_family_links: usize = 4;
 pub const max_memories: usize = 6;
-pub const max_knowledge: usize = 3;
+pub const max_knowledge: usize = 4;
 pub const player_id: u8 = std.math.maxInt(u8);
 
-pub const Topic = enum(u8) { food_reserves, harvest, work };
+pub const Topic = enum(u8) { food_reserves, harvest, work, livestock };
 pub const Belief = enum(u8) {
     well_stocked,
     thin_stock,
@@ -16,8 +16,12 @@ pub const Belief = enum(u8) {
     harvest_modest,
     work_steady,
     work_sparse,
+    livestock_taken,
+    livestock_threatened,
+    livestock_protected,
+    livestock_lost_all,
 };
-pub const Provenance = enum(u8) { witnessed, told, inferred };
+pub const Provenance = enum(u8) { witnessed, told, inferred, notice };
 pub const Privacy = enum(u8) { public, personal, private, secret };
 
 pub const PlayerAction = enum(u8) {
@@ -31,7 +35,7 @@ pub const PlayerAction = enum(u8) {
 
 pub const FamilyKind = enum(u8) { partner, parent, child, sibling };
 pub const GoalKind = enum(u8) { tend_fields, maintain_supplies, craft_better_tools, carry_water, learn_village_trades };
-pub const MemoryKind = enum(u8) { met_player, player_helped, player_betrayed, player_insulted, learned_news, saw_harvest, saw_work };
+pub const MemoryKind = enum(u8) { met_player, player_helped, player_betrayed, player_insulted, learned_news, saw_harvest, saw_work, saw_livestock };
 
 pub const Traits = struct {
     caution: u8 = 50,
@@ -73,6 +77,9 @@ pub const Knowledge = struct {
     event_id: u32,
     observed_at: u64, // Original observation time, preserved through retellings.
     evidence_days: u16 = 0,
+    evidence_count: u16 = 0,
+    evidence_losses: u16 = 0,
+    subject_id: u8 = player_id,
     hop_count: u8 = 0,
     privacy: Privacy = .public,
 };
@@ -201,6 +208,23 @@ pub const Social = struct {
         return null;
     }
 
+    /// A local ecology witness or public notice records sourced evidence.
+    /// No entry is added merely because the player asked about a problem.
+    pub fn observeLivestock(self: *Social, id: u8, knowledge: Knowledge) void {
+        if (knowledge.topic != .livestock or id >= self.count) return;
+        self.addKnowledge(id, knowledge);
+        self.remember(id, .{
+            .kind = .saw_livestock,
+            .subject_id = knowledge.subject_id,
+            .source_id = knowledge.source_id,
+            .event_id = knowledge.event_id,
+            .at_seconds = knowledge.observed_at,
+            .confidence = knowledge.confidence,
+            .salience = 72,
+            .valence = if (knowledge.belief == .livestock_protected) 1 else -1,
+        });
+    }
+
     pub fn trust(self: *const Social, id: u8) i8 {
         if (id >= self.count) return 0;
         return self.persons[id].player.trust;
@@ -318,6 +342,9 @@ pub const Social = struct {
                 h = mix(h, knowledge.event_id);
                 h = mix(h, knowledge.observed_at);
                 h = mix(h, knowledge.evidence_days);
+                h = mix(h, knowledge.evidence_count);
+                h = mix(h, knowledge.evidence_losses);
+                h = mix(h, knowledge.subject_id);
                 h = mix(h, knowledge.hop_count);
                 h = mix(h, @intFromEnum(knowledge.privacy));
             }
@@ -620,6 +647,9 @@ pub const Social = struct {
             .event_id = source_knowledge.event_id,
             .observed_at = source_knowledge.observed_at,
             .evidence_days = source_knowledge.evidence_days,
+            .evidence_count = source_knowledge.evidence_count,
+            .evidence_losses = source_knowledge.evidence_losses,
+            .subject_id = source_knowledge.subject_id,
             .hop_count = @intCast(@min(255, @as(u16, source_knowledge.hop_count) + 1)),
             .privacy = source_knowledge.privacy,
         });
@@ -631,7 +661,7 @@ pub const Social = struct {
             .at_seconds = now,
             .confidence = confidence,
             .salience = if (source_knowledge.topic == .food_reserves) 36 else 28,
-            .valence = if (belief == .critical or belief == .thin_stock or belief == .work_sparse or belief == .harvest_modest) -1 else 0,
+            .valence = if (belief == .critical or belief == .thin_stock or belief == .work_sparse or belief == .harvest_modest or belief == .livestock_taken or belief == .livestock_lost_all) -1 else 0,
         });
         self.recordNpcExchange(from, to, source_knowledge.event_id, now);
     }
@@ -932,4 +962,33 @@ test "important memories stay within a fixed bound" {
         if (memory.kind == .player_betrayed and memory.salience >= 90) retained_betrayal = true;
     }
     try std.testing.expect(retained_betrayal);
+}
+
+test "livestock information preserves household evidence through retelling" {
+    var sim = testSim();
+    var social = Social.init(&sim, 41);
+    social.observeLivestock(0, .{
+        .topic = .livestock,
+        .belief = .livestock_taken,
+        .provenance = .witnessed,
+        .confidence = 96,
+        .source_id = 0,
+        .witness_id = 0,
+        .subject_id = 0,
+        .event_id = 0x500001,
+        .observed_at = 1800,
+        .evidence_count = 5,
+        .evidence_losses = 1,
+    });
+    sim.elapsed_seconds = 3600;
+    social.tick(&sim);
+    const heard = social.knowledgeAbout(2, .livestock).?;
+    try std.testing.expectEqual(Provenance.told, heard.provenance);
+    try std.testing.expectEqual(@as(u8, 0), heard.witness_id);
+    try std.testing.expectEqual(@as(u8, 0), heard.subject_id);
+    try std.testing.expectEqual(@as(u16, 5), heard.evidence_count);
+    try std.testing.expectEqual(@as(u16, 1), heard.evidence_losses);
+    try std.testing.expectEqual(@as(u64, 1800), heard.observed_at);
+    try std.testing.expect(heard.hop_count > 0);
+    try social.validate(&sim);
 }
