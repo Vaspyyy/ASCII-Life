@@ -1,6 +1,6 @@
 # Building and exploring ASCII-Life
 
-Milestone 3 adds a generated rural village, residents with homes and work, daily schedules and an unattended economy to the regional landscape. It uses the native glyph renderer without an engine or external assets. Conversation, world history, combat and save files remain later work.
+Milestone 4 adds social identities, beliefs, memory, local conversation and a learned-information journal to the inhabited village. It uses the native glyph renderer without an engine or external visual assets. World history, combat and save files remain later work.
 
 ## Development environment
 
@@ -9,7 +9,7 @@ The initial target is x86-64 CachyOS/Arch Linux with a Wayland session, Zig **0.
 Arch development packages:
 
 ```sh
-sudo pacman -S --needed zig wayland wayland-protocols vulkan-headers vulkan-icd-loader shaderc pkgconf vulkan-validation-layers vulkan-tools
+sudo pacman -S --needed zig wayland wayland-protocols libxkbcommon vulkan-headers vulkan-icd-loader shaderc pkgconf vulkan-validation-layers vulkan-tools
 ```
 
 Your GPU driver must also supply its Vulkan ICD. `wayland-scanner` generates the stable xdg-shell bindings at build time. `glslc` compiles two shaders to embedded SPIR-V. Neither tool is needed at runtime. There are no package downloads in the Zig build.
@@ -37,7 +37,9 @@ The default xdg-shell XML location is `/usr/share/wayland-protocols/stable/xdg-s
 - **T:** advance the simulation by three hours for development inspection; **Space:** pause/resume simulation and animation.
 - **H:** hide/show the compact control labels.
 - **F11:** toggle fullscreen (also exercises compositor resize and swapchain recreation).
-- **Escape:** close cleanly.
+- **F:** speak with a nearby visible villager. Type a phrase and press **Enter**; **Backspace** edits it. **Escape** leaves the conversation.
+- **J:** open the learned-information journal; **N/P** page through it; **J/Escape** closes it. Conversation and journal reading pause world time.
+- **Escape:** close the game when no conversation or journal is open.
 - Keyboard press/release and pointer events are counted in `--metrics` output.
 - `--capture PATH` saves the first actual Vulkan frame as an RGB PPM and exits; the image copy is allocated only on request. This provides visual QA without a desktop screenshot portal.
 - `--static` freezes the simulation and visual clock for repeatable inspection; camera movement remains available.
@@ -66,7 +68,7 @@ The logical field is 240 × 135 cells, independently rasterized at the window's 
 - `src/main.zig`: application loop and timing.
 - `shaders/`: fullscreen cell rasterization; no image-to-ASCII post-process.
 
-The ordinary build uses the host's Wayland client library, Vulkan loader, and C runtime. Distribution sizes and the self-contained boundary are recorded in `docs/SIZE.md`.
+The ordinary build uses the host's Wayland client library, xkbcommon keyboard-layout library, Vulkan loader, and C runtime. Distribution sizes and the self-contained boundary are recorded in `docs/SIZE.md`.
 
 The runtime bundler writes a fresh `artifacts/ascii-life-runtime` directory and refuses to overwrite an existing bundle. Move an older output aside before rebuilding. This packages the local library closure for measurement; see `docs/SIZE.md` for host assumptions.
 
@@ -99,3 +101,15 @@ The development atlas exposes generation data for QA. It is not the player's jou
 ## Village inspection
 
 See [VILLAGE.md](VILLAGE.md) for the simulation boundary. `--village-report` reports the generated layout and residents without a display. `--simulate-days 28` tests unattended advancement. `--village-overview` selects an elevated QA viewpoint. `python3 scripts/verify_m3.py` checks village reports and native 1440p captures.
+
+## People and conversation inspection
+
+See [PEOPLE.md](PEOPLE.md) for the supported grammar and social rules. `--people-report` prints developer-only social state headlessly; it does not reveal anything in the player's journal. `--talk-to N` opens a developer conversation with a resident index, and repeated `--say TEXT` arguments submit up to 16 lines. A native run also moves the viewpoint near that resident and requires them to be accessible at the chosen time. `--journal` opens the learned entries.
+
+```sh
+./zig-out/bin/ascii-life --people-report --simulate-days 28
+./zig-out/bin/ascii-life --talk-to 0 --say name --say news
+./zig-out/bin/ascii-life --talk-to 0 --say news --journal --capture artifacts/journal.ppm
+python3 scripts/verify_m4.py --headless-only
+python3 scripts/verify_m4.py
+```

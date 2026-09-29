@@ -3,6 +3,7 @@ const scene = @import("scene.zig");
 const camera_mod = @import("camera.zig");
 const village_mod = @import("village.zig");
 const sim_mod = @import("village_sim.zig");
+const interaction = @import("interaction.zig");
 
 const View = camera_mod.View;
 const Village = village_mod.Village;
@@ -77,15 +78,8 @@ pub fn paint(
     const count = @min(sim.resident_count, sim.residents.len);
     for (0..count) |index| {
         const resident = &sim.residents[index];
-        if (resident.activity == .sleeping) continue;
+        if (!interaction.visible(resident, village)) continue;
         const position = sim.residentPosition(index) orelse resident.position;
-        if (resident.activity == .resting and resident.home_building < village.buildingsSlice().len) {
-            const home = village.buildingsSlice()[resident.home_building];
-            const dx = position.x - home.x;
-            const dz = position.z - home.z;
-            const home_radius = @max(home.width, home.depth) * 0.68 + 1.0;
-            if (dx * dx + dz * dz <= home_radius * home_radius) continue;
-        }
         const ground = village.surfaceY(position.x, position.z);
         const motion_seconds: f32 = if (resident.activity == .walking) @as(f32, @floatFromInt(sim.elapsed_seconds % 60000)) / 60.0 else 0;
         drawResident(cells, depth_buffer, view, light, position.x, ground, position.z, resident.age_years, resident.appearance_seed, motion_seconds);
@@ -388,7 +382,7 @@ fn drawResident(cells: []scene.Cell, depth_buffer: []f32, view: View, light: Lig
     const height: f32 = if (age < 7) 1.08 else if (age < 13) 1.34 else 1.72;
     const feet = projectWorld(.{ .x = x, .y = ground, .z = z }, view) orelse return;
     const head = projectWorld(.{ .x = x, .y = ground + height, .z = z }, view) orelse return;
-    if (feet.y < -2 or feet.y > rows_f + 2 or head.y > rows_f or head.y >= feet.y) return;
+    if (feet.y < -2 or head.y > rows_f or head.y >= feet.y) return;
 
     const top = @max(0, @as(i32, @intFromFloat(@floor(head.y))));
     const bottom = @min(@as(i32, @intCast(scene.rows)) - 1, @as(i32, @intFromFloat(@ceil(feet.y))));
@@ -402,52 +396,60 @@ fn drawResident(cells: []scene.Cell, depth_buffer: []f32, view: View, light: Lig
     const skin = shadeAndFog(skin_base, .{ .x = -sin_yaw, .y = 0.32, .z = -cos_yaw }, light, forward);
     const hair = shadeAndFog(hair_base, .{ .x = -sin_yaw, .y = 0.18, .z = -cos_yaw }, light, forward);
     const cloth = shadeAndFog(outfit, .{ .x = -sin_yaw, .y = 0.15, .z = -cos_yaw }, light, forward);
+    const cloth_detail = shadeAndFog(mixColor(outfit, color(215, 206, 180), 0.18), .{ .x = -sin_yaw, .y = 0.15, .z = -cos_yaw }, light, forward);
     const leather = shadeAndFog(color(102, 68, 48), .{ .x = -sin_yaw, .y = 0.12, .z = -cos_yaw }, light, forward);
     const boot = shadeAndFog(color(50, 45, 42), .{ .x = 0, .y = 0.10, .z = 0 }, light, forward);
-    const small = span < 2.2;
+    const small = span < 7;
 
+    // Keep anatomy proportional at conversation distance. A fixed two-cell
+    // width was sufficient in the village overview, but stretched people into
+    // thin columns when the player approached them.
+    const half_width: i32 = if (small) 0 else @max(1, @as(i32, @intFromFloat(@ceil(span * 0.19))));
     var sy = top;
     while (sy <= bottom) : (sy += 1) {
         const v = (@as(f32, @floatFromInt(sy)) + 0.5 - head.y) / span;
-        const body_width: i32 = @intFromFloat(@min(2, @floor(span * 0.13)));
-        const half_width: i32 = if (small or v < 0.17) 0 else if (v < 0.30 or v >= 0.72) @min(1, body_width) else body_width;
         var sx = center_col - half_width;
         while (sx <= center_col + half_width) : (sx += 1) {
             if (sx < 0 or sx >= @as(i32, @intCast(scene.cols))) continue;
-            const dx = sx - center_col;
+            const u = (@as(f32, @floatFromInt(sx)) + 0.5 - feet.x) / span;
+            const across = @abs(u);
             const index = @as(usize, @intCast(sy)) * scene.cols + @as(usize, @intCast(sx));
             if (forward > depth_buffer[index] + 0.9) continue;
 
-            var glyph: u32 = ' ';
+            var glyph: u32 = '#';
             var fg = cloth;
             var bg = cloth;
             if (small) {
-                glyph = if (mix32(seed) % 3 == 0) '&' else '@';
-                fg = hair;
+                glyph = if (v < 0.30) 'o' else if (v < 0.70) '|' else '/';
+                fg = if (v < 0.30) skin else leather;
                 bg = cloth;
-            } else if (v < 0.17) {
-                glyph = if (v < 0.07) '@' else 'o';
-                fg = if (dx == 0) hair else skin;
-                bg = hair;
-            } else if (v < 0.30) {
-                glyph = if (dx == 0) '|' else if (dx < 0) '/' else '\\';
-                fg = leather;
-                bg = leather;
-            } else if (v < 0.68) {
-                if (@abs(dx) == 2 and v < 0.53) {
-                    glyph = if ((dx < 0) != (step > 0)) '/' else '\\';
+            } else if (v < 0.19) {
+                const head_y = (v - 0.095) / 0.095;
+                if (u * u / (0.067 * 0.067) + head_y * head_y > 1) continue;
+                const is_hair = v < 0.045 or (across > 0.052 and v < 0.11);
+                bg = if (is_hair) hair else skin;
+                const eye = v > 0.08 and v < 0.11 and across > 0.025 and across < 0.052;
+                fg = if (eye) hair else bg;
+                glyph = if (eye) '.' else '#';
+            } else if (v < 0.60) {
+                const torso_width: f32 = if (v < 0.27) 0.12 else 0.095;
+                if (across > torso_width) {
+                    const arm_center = 0.145 + step * u * 0.1;
+                    if (v < 0.25 or @abs(across - arm_center) > 0.027) continue;
+                    bg = if (v > 0.52) skin else cloth;
                     fg = leather;
-                    bg = leather;
+                    glyph = if (u < 0) '/' else '\\';
                 } else {
-                    glyph = if (dx == 0) '&' else '#';
-                    fg = if (v > 0.54) leather else cloth;
-                    bg = cloth;
+                    fg = if (v > 0.55) leather else cloth_detail;
+                    glyph = if (v > 0.55) '=' else if (across < 0.018) ':' else '#';
                 }
-            } else if (dx == 0 or @abs(dx) == 1) {
-                const left_leg = dx <= 0;
-                glyph = if ((left_leg and step > 0) or (!left_leg and step <= 0)) '/' else '\\';
+            } else {
+                const leg_center = 0.052 + step * (v - 0.60) * (if (u < 0) @as(f32, 0.05) else -0.05);
+                const leg_width: f32 = if (v > 0.93) 0.049 else 0.034;
+                if (v > 1 or @abs(across - leg_center) > leg_width) continue;
+                bg = if (v > 0.93) boot else leather;
                 fg = boot;
-                bg = leather;
+                glyph = if (v > 0.93) '_' else if (u < 0) '/' else '\\';
             }
             cells[index] = .{ .glyph = glyph, .foreground = fg, .background = bg };
             depth_buffer[index] = forward;

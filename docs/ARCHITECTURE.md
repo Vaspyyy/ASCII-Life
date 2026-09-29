@@ -588,3 +588,9 @@ Only distant rendering blends to the regional lattice. Tree positions and physic
 ## Milestone 3 village
 
 Physical settlement generation, resident simulation and architecture rendering are separate modules: `village.zig`, `village_sim.zig`, and `village_render.zig`. Landscape rendering supplies paths, cultivated ground and clearing. Projected structure surfaces share its depth buffer. The world clock drives resident schedules and economy; draw frequency does not determine production. Headless advancement exercises the same simulation as native play. See [VILLAGE.md](VILLAGE.md) for current behavior and scope.
+
+## Milestone 4 people
+
+`people.zig` attaches compact social state to stable resident identities. `world_clock.zig` schedules social updates at absolute simulation-hour boundaries, including across development clock jumps. `dialogue.zig` owns the narrow intent parser, bounded transcript, learned-information journal and glyph panels. `interaction.zig` gates conversation by physical range, orientation and visibility.
+
+Wayland keyboard layout translation uses libxkbcommon inside `platform.zig`; the game consumes an ordered queue of printable ASCII/edit/submit/cancel events. Simulation and dialogue have no native library imports. Modal reading pauses the shared clock and suppresses movement hotkeys. No save format is introduced in this milestone; social state is session-resident. See [PEOPLE.md](PEOPLE.md) for behavior, limits and the measured dependency rationale.

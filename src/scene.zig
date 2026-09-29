@@ -48,6 +48,10 @@ fn makeGlyphs() [128][2]u32 {
         .{ @as(u8, '\''), [7]u5{ 4, 4, 0, 0, 0, 0, 0 } },
         .{ @as(u8, '"'), [7]u5{ 10, 10, 0, 0, 0, 0, 0 } },
         .{ @as(u8, '`'), [7]u5{ 8, 4, 0, 0, 0, 0, 0 } },
+        .{ @as(u8, '$'), [7]u5{ 4, 15, 20, 14, 5, 30, 4 } },
+        .{ @as(u8, '&'), [7]u5{ 12, 18, 20, 8, 21, 18, 13 } },
+        .{ @as(u8, '{'), [7]u5{ 2, 4, 4, 8, 4, 4, 2 } },
+        .{ @as(u8, '}'), [7]u5{ 8, 4, 4, 2, 4, 4, 8 } },
     };
     inline for (extras) |entry| {
         for (entry[1], 0..) |row, y| for (0..5) |x| {
@@ -77,4 +81,5 @@ test "cell interface and compact glyph orientation" {
     try std.testing.expectEqual(@as(u32, 0), glyph_bits[' '][0]);
     try std.testing.expect(glyph_bits['/'][0] != glyph_bits['\\'][0]);
     try std.testing.expect(glyph_bits['^'][0] != 0);
+    for (33..127) |ch| try std.testing.expect(glyph_bits[ch][0] | glyph_bits[ch][1] != 0);
 }

@@ -29,7 +29,7 @@ Reports are developer data, not facts automatically revealed to the player or jo
 
 ## Scope
 
-The milestone establishes a small functioning settlement. Building interiors, conversation, social memory, relationship changes, player employment, combat and a save-file format are later work. State persists during the running session; restarting reconstructs the initial village. The economy is a compact production/consumption model, not a complete agricultural or market simulation. NPC age and household records provide starting identities; generational life events are not yet implemented.
+The village milestone establishes a small functioning settlement. [Milestone 4](PEOPLE.md) builds conversation, social memory and relationships on these residents. Building interiors, player employment, combat and a save-file format remain later work. State persists during the running session; restarting reconstructs the initial village. The economy is a compact production/consumption model, not a complete agricultural or market simulation. NPC age and household records provide starting identities; generational life events are not yet implemented.
 
 ## Generation and current limits
 

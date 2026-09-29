@@ -8,5 +8,9 @@ test {
     _ = @import("village_sim.zig");
     _ = @import("village_render.zig");
     _ = @import("camera.zig");
+    _ = @import("interaction.zig");
+    _ = @import("people.zig");
+    _ = @import("dialogue.zig");
+    _ = @import("world_clock.zig");
     _ = @import("landscape.zig");
 }

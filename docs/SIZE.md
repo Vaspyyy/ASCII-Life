@@ -340,3 +340,47 @@ The application still caps work at 60 Hz. CPU-equivalent FPS is arithmetic main-
 - Inspected GPU readbacks include arrival, village overview, night and a close street with commuting residents. Logs/captures are ignored local artifacts under `artifacts/m3-*`.
 
 The default village has **21 residents, six households, six homes, two fields, a workshop, granary and well**, connected by 31 path segments. This milestone uses a common street arrangement fitted to viable terrain. It has abstract provisioning and session-resident state, but no building interiors, conversation, generational events or save files. Distant paths can alias at the current glyph resolution. See [VILLAGE.md](VILLAGE.md) for the precise simulation and generation limits.
+
+## Milestone 4 people — 2026-09-29
+
+Measured the M4 working tree based on `1fab90eb63f1c7fa23a26213aab7f7e1b6460072`, Zig 0.16.0 ReleaseSmall, KDE Wayland / NVIDIA RTX 3070, driver 615.71.09. The live power profile was **power-saver** before and after measurement; desktop settings were not changed. These are not performance-mode comparison runs. Build/source/shader digest using the M0 procedure: `10a84e020ab9398c4f72c05e0e571d8b398d936810d85d22c90eb3bad4bc3d2e`. ELF SHA-256: `983f434fd0ff2474a08d1830d642a57ab8ad26287bcfbf197bbfdcad81e7edb6`.
+
+| Distribution | Exact bytes | Change from M3 |
+| --- | ---: | ---: |
+| Stripped dynamic ELF | 252,792 | +50,464 |
+| ELF compressed with `xz -9` | 117,448 | +19,844 |
+| Runtime bundle payload | 4,198,345 | +503,772 |
+| Runtime bundle `.tar.xz` | 1,479,064 | +182,484 |
+
+The added library is libxkbcommon for compositor-provided keyboard layouts and modifiers. The input-only ELF experiment added 1,984 bytes; the library itself is 440,488 bytes (167,044 bytes under `xz -9`). Its library and license are included in the complete distribution totals above. libffi was already in the runtime closure. The font remains a generated 1,024-byte bit table, now covering all printable ASCII; no visual assets or dialogue service were added. The rationale and replacement boundary are in [PEOPLE.md](PEOPLE.md).
+
+The final bundle's ELF hash matches the measured executable. Its loader resolves all ordinary shared-library dependencies inside the bundle, including xkbcommon. It completed 120 native frames at 2560 × 1440 from `/tmp`, displaying a conversation. The kernel, Wayland compositor, GPU driver/ICD and their infrastructure remain host requirements. This is the same-host distribution experiment described above, not a fully static or cross-distribution build.
+
+### 1440p runtime
+
+Each run presented 600 frames at **2560 × 1440**, seed **659966 (`0xa11fe`)**, with 599 GPU timestamp samples and no validation layer. Stationary uses `--static`; the moving tour advances 600 simulated seconds and switches camera halfway through. Conversation uses `--talk-to 0 --say name --say news`, showing the nearby resident and typed dialogue panel with the world clock paused for reading.
+
+| Metric | Stationary | Moving tour | Conversation |
+| --- | ---: | ---: | ---: |
+| Terrain generation | 35.245 ms | 43.072 ms | 38.474 ms |
+| Village and social initialization | 28.321 ms | 27.163 ms | 25.447 ms |
+| Main entry → first successful present | 265.261 ms | 229.842 ms | 242.556 ms |
+| Main-thread CPU/frame | 9.8719 ms | 9.3841 ms | 9.6520 ms |
+| Frame work wall time | 9.9746 ms | 9.4874 ms | 9.7716 ms |
+| GPU command interval | 0.1001 ms | 0.0969 ms | 0.0974 ms |
+| CPU-equivalent FPS (`1000 / CPU ms`) | 101.30 | 106.56 | 103.61 |
+| Steady RSS | 86,336–86,400 KiB | 86,340–86,404 KiB | 86,424–86,488 KiB |
+| NVIDIA process graphics memory | 55 MiB | 55 MiB | 55 MiB |
+
+The logical render field is **240 × 135 (32,400 cells)**. The generated region is **8,192 × 8,192 m (67.108864 km²)**. A fresh complete fine-lattice height scan found **1,040.75 m world Y**, or **960.75 m above the Y=80 m sea datum**.
+
+CPU-equivalent FPS is calculated main-thread capacity, not measured uncapped presentation throughput. The game retains its 60 Hz work cap and FIFO presentation. CPU timings exclude driver worker threads; GPU intervals and startup exclude compositor latency and physical scanout. Other desktop applications remained running. Raw measurements are `artifacts/m4-1440-{static,tour,conversation}.log`, with packaging logs in `artifacts/m4-{size,bundle,bundle-runtime}.log`.
+
+### Validation and scope
+
+- **38/38 tests pass in Debug and ReleaseSmall.** Checks cover reciprocal families, different evidence-linked beliefs, original witness/teller and observation times, stale-rumor rejection, trust/privacy, bounded salient memory, actual goal progress and uneven world-clock partition equivalence. Dialogue checks cover name introduction, refusal without journal leaks, insult history, explicit grammar, input bounds, visible caret and journal paging.
+- `scripts/verify_m4.py` passes six seeds over 28 unattended days, repeat reports, malformed arguments, relationship-dependent replies and learned-only journal assertions. Native 1440p Vulkan validation captures cover repeated conversation, journal, privacy refusal and third person. Repeat images are byte-identical and validation-clean.
+- The M3 six-seed unattended suite and native arrival, overview, commute, evening, night, third-person and alternate-seed captures still pass. Close conversation views now use proportional head/body/limb silhouettes; the far representation stays compact. Conversation and control panels have a six-cell bottom inset so desktop window placement does not clip the input line on the tested monitor.
+- Native key-event probes verified Backspace correction, Shift, spaces, Enter and the active German QWERTZ layout (`q`, physical Y, physical Z produced `qzy`). A 48-second conversation retained simulation time **31,104 seconds** and the starting viewpoint despite typing movement-key letters. Escape left conversation without closing the game; J/N/P/J and F reopened the journal/conversation correctly, then Escape closed the game from normal play. Live input was verified through the game's diagnostics; visual inspection used Vulkan readbacks because the desktop screenshot backend was unavailable.
+
+Social and journal state persist within the running session. Save files, generational events, actual player employment/contracts and further problem simulation remain later work. Saying `help` reveals public work; it does not manufacture completed help or trust. See [PEOPLE.md](PEOPLE.md) for the current rules and limits.

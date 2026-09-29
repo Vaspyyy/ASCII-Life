@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     mod.addIncludePath(h.dirname());
     mod.addCSourceFile(.{ .file = c, .flags = &.{"-Os"} });
     mod.linkSystemLibrary("wayland-client", .{});
+    mod.linkSystemLibrary("xkbcommon", .{});
     mod.linkSystemLibrary("vulkan", .{});
     inline for (.{ "vert", "frag" }) |stage| {
         const shader = b.addSystemCommand(&.{ "glslc", "-Os", "--target-env=vulkan1.0" });

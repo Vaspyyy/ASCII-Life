@@ -194,7 +194,7 @@ Prefer procedural or compact representations for:
 - **Architecture:** custom renderer and simulation stack
 - **Primary philosophy:** deterministic generation, simulation LOD, compact data, measurable binary size
 
-Milestone 3 adds the initial rural village and its daily life to the generated geography. Households, jobs and production advance on a shared simulation clock.
+Milestone 4 adds people with relationships, beliefs and memories to the starting village. Talk to residents and record what they actually tell you in your journal.
 
 See:
 
@@ -209,7 +209,7 @@ See:
 
 ## Status
 
-**Pre-alpha / Milestone 3 starting village.**
+**Pre-alpha / Milestone 4 people.**
 
 Native build, controls, and validation instructions: [docs/BUILD.md](docs/BUILD.md).
 Size and performance records: [docs/SIZE.md](docs/SIZE.md).
@@ -218,4 +218,4 @@ Arrive on a path outside a generated rural village. Homes, cultivated plots and 
 
 Generation and inspection tools: [docs/WORLDGEN.md](docs/WORLDGEN.md).
 
-Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation, social memory, combat and save files remain future work.
+Village behavior and inspection: [docs/VILLAGE.md](docs/VILLAGE.md). Conversation and social state: [docs/PEOPLE.md](docs/PEOPLE.md). Combat, generational events and save files remain future work.

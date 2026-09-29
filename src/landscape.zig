@@ -727,7 +727,7 @@ fn paintHud(cells: []scene.Cell, time: f32, sim: ?*const Sim) void {
     scene.label(cells, 4, 3, "A LIFE", scene.rgb(244, 226, 190));
     scene.label(cells, 4, 5, "A STRANGER / AGE 15", scene.rgb(177, 202, 205));
 
-    const bottom_y = scene.rows - 4;
+    const bottom_y = scene.rows - 10;
     const bottom_height: usize = 3;
     panel(cells, 2, bottom_y, scene.cols - 4, bottom_height, scene.rgb(9, 18, 24), 0.82);
     scene.label(cells, 4, bottom_y, "WASD MOVE  ARROWS LOOK  C CAMERA  Q E HEIGHT  SHIFT FAST", scene.rgb(207, 222, 216));

@@ -4,6 +4,15 @@ pub const c = @cImport({
     @cInclude("native.h");
 });
 
+pub const TextEvent = union(enum) {
+    character: u8,
+    backspace,
+    submit,
+    cancel,
+};
+
+const text_event_capacity = 128;
+
 /// The Wayland state must stay at a stable address from `init` through
 /// `deinit`: Wayland listener user data points back to this value.
 pub const Platform = struct {
@@ -22,6 +31,10 @@ pub const Platform = struct {
     /// both press and release, including the keys in keyboard-enter events.
     keys_down: [768]bool = [_]bool{false} ** 768,
     keys_pressed: [768]bool = [_]bool{false} ** 768,
+    text_keys_down: [768]bool = [_]bool{false} ** 768,
+    text_mode: bool = false,
+    text_events: [text_event_capacity]TextEvent = undefined,
+    text_event_count: usize = 0,
     right_mouse: bool = false,
     look_dx: f32 = 0,
     look_dy: f32 = 0,
@@ -43,14 +56,19 @@ pub const Platform = struct {
     pending_height: u32 = 1080,
     pending_suspended: bool = false,
     registry_failed: bool = false,
+    xkb_context: @TypeOf(c.xkb_context_new(c.XKB_CONTEXT_NO_FLAGS)) = null,
+    xkb_keymap: @TypeOf(c.xkb_keymap_new_from_string(null, null, c.XKB_KEYMAP_FORMAT_TEXT_V1, c.XKB_KEYMAP_COMPILE_NO_FLAGS)) = null,
+    xkb_state: @TypeOf(c.xkb_state_new(null)) = null,
 
     pub fn init(self: *Platform) !void {
         const width = self.width;
         const height = self.height;
         self.* = .{ .width = width, .height = height, .pending_width = width, .pending_height = height };
 
-        self.display = c.wl_display_connect(null) orelse return error.WaylandConnectFailed;
+        self.xkb_context = c.xkb_context_new(c.XKB_CONTEXT_NO_FLAGS) orelse return error.XkbContextFailed;
         errdefer self.deinit();
+
+        self.display = c.wl_display_connect(null) orelse return error.WaylandConnectFailed;
 
         const display = self.display.?;
         self.registry = c.wl_display_get_registry(display) orelse return error.WaylandRegistryFailed;
@@ -87,9 +105,34 @@ pub const Platform = struct {
     pub fn clearInput(self: *Platform) void {
         self.keys_down = [_]bool{false} ** 768;
         self.keys_pressed = [_]bool{false} ** 768;
+        self.text_keys_down = [_]bool{false} ** 768;
+        self.text_event_count = 0;
         self.look_dx = 0;
         self.look_dy = 0;
         self.right_mouse = false;
+    }
+
+    /// Enable layout-aware ASCII text input while preserving the normal game
+    /// controls outside this mode. Transitions discard held movement keys and
+    /// pending text so an opening/closing key cannot leak into gameplay/UI.
+    pub fn setTextMode(self: *Platform, enabled: bool) void {
+        if (self.text_mode == enabled) return;
+        self.text_mode = enabled;
+        self.keys_down = [_]bool{false} ** 768;
+        self.keys_pressed = [_]bool{false} ** 768;
+        self.text_keys_down = [_]bool{false} ** 768;
+        self.text_event_count = 0;
+        self.look_dx = 0;
+        self.look_dy = 0;
+        self.right_mouse = false;
+    }
+
+    /// Return key events in compositor order, then empty the bounded queue.
+    /// The returned slice stays valid until this Platform records more events.
+    pub fn takeTextEvents(self: *Platform) []const TextEvent {
+        const events = self.text_events[0..self.text_event_count];
+        self.text_event_count = 0;
+        return events;
     }
 
     pub fn takePressed(self: *Platform, key: usize) bool {
@@ -119,6 +162,9 @@ pub const Platform = struct {
         self.registry = null;
         if (self.display) |display| c.wl_display_disconnect(display);
         self.display = null;
+        self.releaseXkbKeymap();
+        if (self.xkb_context) |context| c.xkb_context_unref(context);
+        self.xkb_context = null;
         self.running = false;
     }
 
@@ -202,6 +248,25 @@ pub const Platform = struct {
 
     fn countPointerEvent(self: *Platform) void {
         self.pointer_events +%= 1;
+    }
+
+    fn queueTextEvent(self: *Platform, event: TextEvent) void {
+        if (self.text_event_count == self.text_events.len) return;
+        self.text_events[self.text_event_count] = event;
+        self.text_event_count += 1;
+    }
+
+    fn releaseXkbKeymap(self: *Platform) void {
+        if (self.xkb_state) |state| c.xkb_state_unref(state);
+        self.xkb_state = null;
+        if (self.xkb_keymap) |keymap| c.xkb_keymap_unref(keymap);
+        self.xkb_keymap = null;
+    }
+
+    fn resetXkbModifiers(self: *Platform) void {
+        if (self.xkb_state) |state| {
+            _ = c.xkb_state_update_mask(state, 0, 0, 0, 0, 0, 0);
+        }
     }
 };
 
@@ -315,6 +380,7 @@ fn onSeatCapabilities(data: ?*anyopaque, seat: ?*c.wl_seat, capabilities: u32) c
         if (self.keyboard) |keyboard| c.wl_keyboard_destroy(keyboard);
         self.keyboard = null;
         self.clearInput();
+        self.resetXkbModifiers();
     }
 
     if ((capabilities & c.WL_SEAT_CAPABILITY_POINTER) != 0 and self.pointer == null) {
@@ -334,8 +400,50 @@ fn onSeatCapabilities(data: ?*anyopaque, seat: ?*c.wl_seat, capabilities: u32) c
 
 fn onSeatName(_: ?*anyopaque, _: ?*c.wl_seat, _: [*c]const u8) callconv(.c) void {}
 
-fn onKeyboardKeymap(_: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, fd: i32, _: u32) callconv(.c) void {
-    if (fd >= 0) _ = c.close(fd);
+fn onKeyboardKeymap(data: ?*anyopaque, _: ?*c.wl_keyboard, format: u32, fd: i32, size: u32) callconv(.c) void {
+    const self = Platform.fromUserData(data);
+    if (format != c.WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 or fd < 0) {
+        if (fd >= 0) _ = c.close(fd);
+        self.releaseXkbKeymap();
+        return;
+    }
+
+    const mapping = c.ascii_life_map_keymap(fd, size) orelse {
+        self.releaseXkbKeymap();
+        return;
+    };
+    defer c.ascii_life_unmap_keymap(mapping, size);
+
+    const map_size: usize = @intCast(size);
+    if (map_size == 0) {
+        self.releaseXkbKeymap();
+        return;
+    }
+    const bytes: [*]const u8 = @ptrCast(mapping);
+    if (bytes[map_size - 1] != 0) {
+        self.releaseXkbKeymap();
+        return;
+    }
+
+    const context = self.xkb_context orelse return;
+    const keymap = c.xkb_keymap_new_from_string(
+        context,
+        mapping,
+        c.XKB_KEYMAP_FORMAT_TEXT_V1,
+        c.XKB_KEYMAP_COMPILE_NO_FLAGS,
+    ) orelse {
+        self.releaseXkbKeymap();
+        return;
+    };
+    const state = c.xkb_state_new(keymap) orelse {
+        c.xkb_keymap_unref(keymap);
+        self.releaseXkbKeymap();
+        return;
+    };
+
+    self.releaseXkbKeymap();
+    self.xkb_keymap = keymap;
+    self.xkb_state = state;
 }
 
 fn onKeyboardEnter(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surface, keys: ?*c.wl_array) callconv(.c) void {
@@ -348,7 +456,13 @@ fn onKeyboardEnter(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surf
                 const values: [*]const u32 = @ptrCast(@alignCast(raw_data));
                 const count = size / @sizeOf(u32);
                 for (values[0..count]) |key| {
-                    if (key < self.keys_down.len) self.keys_down[key] = true;
+                    if (key < self.keys_down.len) {
+                        if (self.text_mode) {
+                            self.text_keys_down[key] = true;
+                        } else {
+                            self.keys_down[key] = true;
+                        }
+                    }
                 }
             }
         }
@@ -356,27 +470,47 @@ fn onKeyboardEnter(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surf
 }
 
 fn onKeyboardLeave(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: ?*c.wl_surface) callconv(.c) void {
-    Platform.fromUserData(data).clearInput();
+    const self = Platform.fromUserData(data);
+    self.clearInput();
+    self.resetXkbModifiers();
 }
 
 fn onKeyboardKey(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, key: u32, state: u32) callconv(.c) void {
     const self = Platform.fromUserData(data);
     const pressed = state == c.WL_KEYBOARD_KEY_STATE_PRESSED;
-    const was_down = key < self.keys_down.len and self.keys_down[key];
-    if (key < self.keys_down.len) self.keys_down[key] = pressed;
+    const key_index: ?usize = if (key < self.keys_down.len) @intCast(key) else null;
+    const was_down = if (key_index) |index|
+        (if (self.text_mode) self.text_keys_down[index] else self.keys_down[index])
+    else
+        false;
+    if (key_index) |index| {
+        if (self.text_mode) {
+            self.text_keys_down[index] = pressed;
+            self.keys_down[index] = false;
+        } else {
+            self.keys_down[index] = pressed;
+            self.text_keys_down[index] = false;
+        }
+    }
     self.countKeyEvent();
 
-    // Linux evdev: Escape is 1, Space is 57, and F11 is 87. Ignore repeated presses for
-    // the toggle while still counting every event and tracking key release.
+    // F11 stays global in every mode; presses already held are ignored so
+    // compositor repeat cannot toggle fullscreen repeatedly.
     if (pressed and !was_down) {
-        if (key < self.keys_pressed.len) self.keys_pressed[key] = true;
-        if (key == 1) self.running = false;
         if (key == 87) {
             self.fullscreen = !self.fullscreen;
             if (self.toplevel) |toplevel| {
                 if (self.fullscreen) c.xdg_toplevel_set_fullscreen(toplevel, null) else c.xdg_toplevel_unset_fullscreen(toplevel);
             }
         }
+
+        if (self.text_mode) {
+            handleTextKey(self, key);
+            return;
+        }
+
+        if (key_index) |index| self.keys_pressed[index] = true;
+        if (key == 1) self.running = false;
         if (key == 57) {
             self.user_paused = !self.user_paused;
             self.updatePaused();
@@ -384,8 +518,33 @@ fn onKeyboardKey(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, key: u32
     }
 }
 
-fn onKeyboardModifiers(_: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
+fn onKeyboardModifiers(data: ?*anyopaque, _: ?*c.wl_keyboard, _: u32, depressed: u32, latched: u32, locked: u32, group: u32) callconv(.c) void {
+    const self = Platform.fromUserData(data);
+    if (self.xkb_state) |state| {
+        _ = c.xkb_state_update_mask(state, depressed, latched, locked, 0, 0, group);
+    }
+}
 fn onKeyboardRepeatInfo(_: ?*anyopaque, _: ?*c.wl_keyboard, _: i32, _: i32) callconv(.c) void {}
+
+fn handleTextKey(self: *Platform, key: u32) void {
+    if (key >= self.keys_down.len) return;
+    const state = self.xkb_state orelse return;
+    const keycode = key + 8; // Wayland supplies evdev codes; XKB adds 8.
+    const keysym = c.xkb_state_key_get_one_sym(state, keycode);
+    if (keysym == c.XKB_KEY_Escape) {
+        self.keys_pressed[1] = true;
+        self.queueTextEvent(.cancel);
+    } else if (keysym == c.XKB_KEY_Return or keysym == c.XKB_KEY_KP_Enter) {
+        self.queueTextEvent(.submit);
+    } else if (keysym == c.XKB_KEY_BackSpace) {
+        self.queueTextEvent(.backspace);
+    } else {
+        const codepoint = c.xkb_state_key_get_utf32(state, keycode);
+        if (codepoint >= 0x20 and codepoint <= 0x7e) {
+            self.queueTextEvent(.{ .character = @intCast(codepoint) });
+        }
+    }
+}
 
 fn onPointerEnter(data: ?*anyopaque, _: ?*c.wl_pointer, _: u32, _: ?*c.wl_surface, x: c.wl_fixed_t, y: c.wl_fixed_t) callconv(.c) void {
     const self = Platform.fromUserData(data);

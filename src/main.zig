@@ -8,6 +8,10 @@ const CameraInput = @import("camera.zig").Input;
 const landscape = @import("landscape.zig");
 const Village = @import("village.zig").Village;
 const Sim = @import("village_sim.zig").Sim;
+const Social = @import("people.zig").Social;
+const Dialogue = @import("dialogue.zig").Dialogue;
+const interaction = @import("interaction.zig");
+const world_clock = @import("world_clock.zig");
 const clock = @cImport({
     @cInclude("time.h");
     @cInclude("stdio.h");
@@ -61,6 +65,11 @@ fn run(init: std.process.Init.Minimal) !void {
     var atlas = false;
     var world_report = false;
     var village_report = false;
+    var people_report = false;
+    var talk_to: ?usize = null;
+    var journal = false;
+    var lines: [16][]const u8 = undefined;
+    var line_count: usize = 0;
     var simulate_days: u64 = 0;
     var overview = false;
     var width: u32 = 2560;
@@ -88,6 +97,19 @@ fn run(init: std.process.Init.Minimal) !void {
             world_report = true;
         } else if (std.mem.eql(u8, arg, "--village-report")) {
             village_report = true;
+        } else if (std.mem.eql(u8, arg, "--people-report")) {
+            people_report = true;
+        } else if (std.mem.eql(u8, arg, "--talk-to")) {
+            talk_to = try std.fmt.parseInt(usize, args.next() orelse return error.MissingResident, 10);
+        } else if (std.mem.eql(u8, arg, "--say")) {
+            if (line_count == lines.len) return error.TooManyDialogueLines;
+            const line = args.next() orelse return error.MissingDialogueLine;
+            if (line.len > @import("dialogue.zig").input_capacity) return error.DialogueLineTooLong;
+            for (line) |ch| if (ch < 0x20 or ch > 0x7e) return error.NonAsciiDialogueLine;
+            lines[line_count] = line;
+            line_count += 1;
+        } else if (std.mem.eql(u8, arg, "--journal")) {
+            journal = true;
         } else if (std.mem.eql(u8, arg, "--simulate-days")) {
             simulate_days = try std.fmt.parseInt(u64, args.next() orelse return error.MissingDayCount, 10);
             if (simulate_days > 3650) return error.InvalidDayCount;
@@ -108,12 +130,15 @@ fn run(init: std.process.Init.Minimal) !void {
             if (values.next() != null or @abs(v[0]) > 4096 or @abs(v[1]) > 4096 or @abs(v[2]) > 100 or @abs(v[3]) > 2 or v[4] < 0 or v[4] > 1500) return error.InvalidView;
             pose = v;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            log("ASCII-Life / Milestone 3\n--atlas        Developer geography overview\n--world-report Headless geography validation and peak scan\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze simulation and animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T step clock (dev) / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
+            log("ASCII-Life / Milestone 4\n--atlas        Developer geography overview\n--world-report Headless geography validation and peak scan\n--seed N       Reproducible regional seed (decimal or 0x hex)\n--time F       Day fraction [0,1), default 0.36\n--third-person Start behind the explorer\n--hide-hud     Hide labels and controls\n--view X,Z,YAW,PITCH,HEIGHT  Set a development viewpoint (radians/metres)\n--size WxH     Initial window pixels (320x240 to 3840x2160)\n--metrics      Report generation, CPU/GPU timing, and final viewpoint\n--static       Freeze simulation and animation\n--tour         Fixed-step movement benchmark (600 frames by default)\n--frames N     Exit after N presentations\n--capture PATH Save first Vulkan frame as PPM and exit\nWASD move / arrows or right-drag look / Q,E altitude / Shift fast\nC camera / R reset / T step clock (dev) / H HUD / Space pause time\nF11 fullscreen / Esc close\n", .{});
             log("--village-report  Headless layout and residents report\n--simulate-days N Advance unattended village for QA (headless)\n--village-overview Elevated development view of the village\n", .{});
+            log("F speak with nearby villager / J journal / Enter submit / Esc leave\nConversation understands: hello, name, work, family, news, plans,\nask about food, help, thanks, sorry, goodbye. Time pauses while reading.\n--people-report Headless social validation (including private QA state)\n--talk-to N     Developer conversation with resident index N\n--say TEXT      Submit a line (repeat up to 16 times; requires --talk-to)\n--journal       Open learned-information journal\n", .{});
             return;
         } else return error.UnknownArgument;
     }
     if (tour and capture_path != null) return error.TourCaptureConflict;
+    if (line_count != 0 and talk_to == null) return error.DialogueNeedsSpeaker;
+    if (tour and (talk_to != null or journal)) return error.TourDialogueConflict;
     if (tour and limit == 0) limit = 600;
     const generation_start = now(clock.CLOCK_MONOTONIC);
     var terrain = try terrain_mod.Terrain.init(std.heap.page_allocator, seed);
@@ -126,10 +151,24 @@ fn run(init: std.process.Init.Minimal) !void {
     const village_started = now(clock.CLOCK_MONOTONIC);
     const village = try Village.init(&terrain);
     var sim = Sim.init(&village, seed);
-    sim.advance(@intFromFloat(time_of_day * 86400), &village);
-    if (village_report) {
-        sim.advance(simulate_days * 86400, &village);
+    var social = Social.init(&sim, seed);
+    world_clock.advance(&sim, &social, &village, @intFromFloat(time_of_day * 86400));
+    world_clock.advance(&sim, &social, &village, simulate_days * 86400);
+    var dialogue: Dialogue = .{};
+    if (talk_to) |speaker| {
+        if (speaker >= sim.resident_count) return error.InvalidResident;
+        dialogue.open(speaker, &social, &sim);
+        for (lines[0..line_count]) |line| {
+            if (!dialogue.active) return error.ConversationEnded;
+            for (line) |ch| dialogue.addChar(ch);
+            dialogue.submit(&social, &sim);
+            if (people_report) log("said={s}\nreply={s}\n", .{ line, dialogue.reply[0..dialogue.reply_len] });
+        }
+    }
+    if (journal) dialogue.toggleJournal();
+    if (village_report or people_report) {
         try reportVillage(&village, &sim);
+        if (people_report) try reportPeople(&sim, &social, &dialogue);
         return;
     }
     terrain.start = village.arrival;
@@ -137,12 +176,14 @@ fn run(init: std.process.Init.Minimal) !void {
     if (overview) camera.setPose(&terrain, village.center.x - 85, village.center.z - 100, 0.65, -0.32, 60);
     camera.third_person = third_person;
     if (pose) |v| camera.setPose(&terrain, v[0], v[1], v[2], v[3], v[4]);
+    if (talk_to) |speaker| try approachSpeaker(&camera, &terrain, &village, &sim, speaker);
     const starting_camera = camera;
     if (metrics) log("seed={d} terrain_generation_ms={d:.3}\n", .{ seed, @as(f64, @floatFromInt(terrain_elapsed)) / 1e6 });
     if (metrics) log("village_generation_ms={d:.3}\n", .{@as(f64, @floatFromInt(now(clock.CLOCK_MONOTONIC) - village_started)) / 1e6});
     var window: platform.Platform = .{ .width = width, .height = height };
     try window.init();
     defer window.deinit();
+    window.setTextMode(dialogue.active or dialogue.journal_open);
     while (!window.configured and window.running) try window.wait(100);
     if (!window.running) return;
     var renderer: Renderer = .{};
@@ -183,7 +224,12 @@ fn run(init: std.process.Init.Minimal) !void {
         const dt: f32 = if (tour) 1.0 / 60.0 else @min(0.1, @as(f32, @floatFromInt(frame_start - previous_time)) / 1e9);
         previous_time = frame_start;
         var input: CameraInput = .{};
-        if (capture_path == null and !tour) {
+        if (capture_path == null and !tour and !dialogue.active and !dialogue.journal_open) {
+            if (window.takePressed(33)) {
+                if (interaction.target(&sim, &village, &camera)) |speaker| dialogue.open(speaker, &social, &sim);
+            }
+            if (window.takePressed(36)) dialogue.toggleJournal();
+            window.setTextMode(dialogue.active or dialogue.journal_open);
             input = .{
                 .forward = axis(&window, 17, 31),
                 .strafe = axis(&window, 32, 30),
@@ -195,8 +241,26 @@ fn run(init: std.process.Init.Minimal) !void {
             };
             if (window.takePressed(35)) show_hud = !show_hud;
             if (window.takePressed(19)) camera = starting_camera;
-            if (window.takePressed(20)) sim.advance(10800, &village); // Development clock step, not unlocked player rest.
+            if (window.takePressed(20)) world_clock.advance(&sim, &social, &village, 10800); // Development clock step, not unlocked player rest.
         }
+        for (window.takeTextEvents()) |event| {
+            switch (event) {
+                .character => |ch| {
+                    if (dialogue.journal_open) {
+                        switch (std.ascii.toLower(ch)) {
+                            'j' => dialogue.toggleJournal(),
+                            'n' => dialogue.pageJournal(1),
+                            'p' => dialogue.pageJournal(-1),
+                            else => {},
+                        }
+                    } else dialogue.addChar(ch);
+                },
+                .backspace => dialogue.backspace(),
+                .submit => dialogue.submit(&social, &sim),
+                .cancel => if (dialogue.journal_open) dialogue.toggleJournal() else dialogue.close(),
+            }
+        }
+        window.setTextMode(dialogue.active or dialogue.journal_open);
         if (tour and !tour_step_pending) {
             const toggle = frames >= limit / 2 and !tour_changed_view;
             if (toggle) tour_changed_view = true;
@@ -206,19 +270,26 @@ fn run(init: std.process.Init.Minimal) !void {
         window.look_dx = 0;
         window.look_dy = 0;
         camera.updateInVillage(&terrain, &village, input, if (capture_path != null or !advance) 0 else dt);
-        if (advance and !frozen and (tour or !window.paused)) {
+        if (advance and !frozen and !dialogue.active and !dialogue.journal_open and (tour or !window.paused)) {
             animation_seconds = @mod(animation_seconds + dt, 86400);
             if (tour) {
-                sim.advance(1, &village);
+                world_clock.advance(&sim, &social, &village, 1);
             } else {
                 sim_fraction_ns += @as(u64, @intFromFloat(dt * 1e9)) * 60;
-                sim.advance(sim_fraction_ns / 1_000_000_000, &village);
+                world_clock.advance(&sim, &social, &village, sim_fraction_ns / 1_000_000_000);
                 sim_fraction_ns %= 1_000_000_000;
             }
         }
         time_of_day = sim.timeOfDay();
         if (tour) tour_step_pending = true;
-        if (atlas) landscape.fillAtlas(&cells, &terrain, camera.view(&terrain)) else landscape.fillVillage(&cells, &terrain, camera.villageView(&terrain, &village), time_of_day, animation_seconds, show_hud, &village, &sim);
+        if (atlas) landscape.fillAtlas(&cells, &terrain, camera.view(&terrain)) else landscape.fillVillage(&cells, &terrain, camera.villageView(&terrain, &village), time_of_day, animation_seconds, show_hud and !dialogue.active and !dialogue.journal_open, &village, &sim);
+        if (show_hud and !atlas and !dialogue.active and !dialogue.journal_open) {
+            scene.label(&cells, 4, scene.rows - 8, "J JOURNAL", scene.rgb(207, 222, 216));
+            if (interaction.target(&sim, &village, &camera) != null) {
+                scene.label(&cells, scene.cols / 2 - 12, scene.rows - 12, "F SPEAK WITH VILLAGER", scene.rgb(255, 225, 159));
+            }
+        }
+        dialogue.paint(&cells);
         try renderer.draw(&cells, scene.cols, scene.rows);
         cpu_ns += now(clock.CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         wall_ns += now(clock.CLOCK_MONOTONIC) - frame_start;
@@ -251,6 +322,7 @@ fn run(init: std.process.Init.Minimal) !void {
     }
     if (metrics) {
         try reportVillage(&village, &sim);
+        try reportPeople(&sim, &social, &dialogue);
         const cache_stats = terrain.cache.stats();
         log("output={d}x{d} grid={d}x{d} tile_hits={d} tile_misses={d} tile_evictions={d}\n", .{ window.width, window.height, scene.cols, scene.rows, cache_stats.hits, cache_stats.misses, cache_stats.evictions });
         log("view={d:.2},{d:.2},{d:.3},{d:.3},{d:.2} third_person={} time={d:.4}\n", .{ camera.player_x, camera.player_z, camera.yaw, camera.pitch, camera.player_y - terrain.standingHeight(camera.player_x, camera.player_z), camera.third_person, time_of_day });
@@ -283,6 +355,40 @@ fn finiteFloat(text: []const u8) !f32 {
     const value = try std.fmt.parseFloat(f32, text);
     if (!std.math.isFinite(value)) return error.NonFiniteArgument;
     return value;
+}
+
+fn approachSpeaker(camera: *Camera, terrain: *const terrain_mod.Terrain, village: *const Village, sim: *const Sim, speaker: usize) !void {
+    const p = sim.residents[speaker].position;
+    for (0..16) |i| {
+        const angle = @as(f32, @floatFromInt(i)) * std.math.tau / 16;
+        const x = p.x + @sin(angle) * 3.5;
+        const z = p.z + @cos(angle) * 3.5;
+        if (village.blocked(x, z, 0.5)) continue;
+        camera.setPose(terrain, x, z, angle + std.math.pi, -0.12, 0);
+        camera.pitch = std.math.atan((p.y + 1.1 - (camera.player_y + 2.5)) / 3.5);
+        if (interaction.target(sim, village, camera) == speaker) return;
+    }
+    return error.ResidentNotReachable;
+}
+
+fn reportPeople(sim: *const Sim, social: *const Social, dialogue: *const Dialogue) !void {
+    try social.validate(sim);
+    log("people={d} social_fingerprint={x} social_validation_ok=1 journal_entries={d} conversation_active={}\n", .{ sim.resident_count, social.fingerprint(), dialogue.journal_count, dialogue.active });
+    log("dialogue_speaker={d} journal_open={} history_turns={d} dialogue_reply={s}\n", .{ dialogue.speaker_id, dialogue.journal_open, dialogue.history_count, dialogue.reply[0..dialogue.reply_len] });
+    for (0..dialogue.history_count) |i| {
+        const turn = dialogue.history[(dialogue.history_start + i) % @import("dialogue.zig").max_history];
+        log("dialogue_typed={s}\ndialogue_answer={s}\n", .{ turn.player_line[0..turn.player_len], turn.reply[0..turn.reply_len] });
+    }
+    for (social.persons[0..social.count], 0..) |person, id| {
+        log("person={d} name={s} job={s} family_links={d} memories={d} trust={d} goal={s} goal_hours={d}/{d}\n", .{ id, person.nameSlice(), @tagName(person.job), person.family_count, person.memory_count, person.player.trust, @tagName(person.goal.kind), person.goal.progress_hours, person.goal.target_hours });
+        for (person.knowledge[0..person.knowledge_count]) |knowledge| {
+            log("belief_person={d} topic={s} belief={s} provenance={s} source={d} witness={d} event={d} confidence={d} evidence_days={d}\n", .{ id, @tagName(knowledge.topic), @tagName(knowledge.belief), @tagName(knowledge.provenance), knowledge.source_id, knowledge.witness_id, knowledge.event_id, knowledge.confidence, knowledge.evidence_days });
+        }
+    }
+    for (0..dialogue.journal_count) |i| {
+        const entry = dialogue.journal[(dialogue.journal_start + i) % @import("dialogue.zig").max_journal_entries];
+        log("journal_source={d} learned_day={d} journal={s}\n", .{ entry.source_id, entry.learned_day, entry.text[0..entry.text_len] });
+    }
 }
 fn axis(window: *const platform.Platform, positive: usize, negative: usize) f32 {
     return @as(f32, @floatFromInt(@intFromBool(window.keys_down[positive]))) - @as(f32, @floatFromInt(@intFromBool(window.keys_down[negative])));

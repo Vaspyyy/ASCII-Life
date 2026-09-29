@@ -20,7 +20,7 @@ for path in sorted(set(re.findall(r"(/[^\s]+)", listing))):
     shutil.copy2(source.resolve(), bundle / "lib" / source.name)
 licenses = bundle / "licenses"
 licenses.mkdir()
-for package in ("glibc", "wayland", "libffi", "vulkan-icd-loader"):
+for package in ("glibc", "wayland", "libffi", "libxkbcommon", "vulkan-icd-loader"):
     source = pathlib.Path("/usr/share/licenses") / package
     if source.exists():
         shutil.copytree(source, licenses / package, symlinks=False)
@@ -29,7 +29,7 @@ base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 exec "$base/lib/ld-linux-x86-64.so.2" --library-path "$base/lib" "$base/ascii-life" "$@"
 ''')
 (bundle / "run").chmod(0o755)
-(bundle / "README.txt").write_text('''ASCII-Life Milestone 3 local runtime bundle.
+(bundle / "README.txt").write_text('''ASCII-Life Milestone 4 local runtime bundle.
 Run ./run inside an active Wayland session.
 Includes the executable and its current ldd library closure, with available
 system package license notices. Generated for the tested x86-64 CachyOS host.
